@@ -15,6 +15,7 @@ import httpp/send
 import mist
 import questly/hash
 import questly/swim_store.{type NodeInfo, Alive, Dead, NodeInfo, Suspect}
+import questly/util
 import wisp
 import wisp/wisp_mist
 
@@ -167,7 +168,7 @@ fn sync_candidates(
           send: SyncRequest(
             self: state.self,
             you:,
-            nodes: list.sample(nodelist, 2),
+            nodes: list.sample(nodelist, 3),
           ),
         )
 
@@ -448,7 +449,7 @@ fn send_sync_request(
   let body = encode_sync_request(request) |> json.to_string
 
   let assert Ok(request) =
-    request.to("http://" <> hostname <> ":" <> int.to_string(port) <> "/sync")
+    request.to(util.internal_url(hostname, port, "/sync"))
     |> result.map(request.set_method(_, http.Post))
     |> result.map(request.set_header(_, "content-type", "application/json"))
     |> result.map(request.set_query(_, [#("secret", key)]))
@@ -458,12 +459,7 @@ fn send_sync_request(
   let server_response =
     send.send(request)
     |> result.map_error(fn(err) {
-      io.println_error(
-        "error sending sync request to "
-        <> hostname
-        <> ":"
-        <> int.to_string(port),
-      )
+      io.println_error("error sending sync request to " <> hostname)
       echo err
     })
     |> result.replace_error(Nil)
@@ -491,7 +487,7 @@ fn send_ping_request(
   wait timeout: Int,
 ) -> Bool {
   let assert Ok(request) =
-    request.to("http://" <> hostname <> ":" <> int.to_string(port) <> "/ping")
+    request.to(util.internal_url(hostname, port, "/ping"))
     |> result.map(request.set_query(_, [#("secret", key)]))
     as "could not create ping request"
 
@@ -584,9 +580,7 @@ fn send_checkup_request(
   let body = CheckupRequest(info) |> encode_checkup_request |> json.to_string
 
   let assert Ok(request) =
-    request.to(
-      "http://" <> hostname <> ":" <> int.to_string(port) <> "/checkup",
-    )
+    request.to(util.internal_url(hostname, port, "/checkup"))
     |> result.map(request.set_method(_, http.Post))
     |> result.map(request.set_header(_, "content-type", "application/json"))
     |> result.map(request.set_query(_, [#("secret", key)]))
@@ -624,7 +618,7 @@ fn start_swim_api(swim: Swim, config: SwimConfig) {
     |> mist.start
 
   start_result
-  |> result.replace_error(actor.InitFailed("failed to start api"))
+  |> result.replace_error(actor.InitFailed("failed to start swim api"))
 }
 
 pub fn supervised(config: SwimConfig) {

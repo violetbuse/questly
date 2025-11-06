@@ -6,6 +6,7 @@ import gleam/list
 import gleam/otp/static_supervisor as supervisor
 import gleam/string
 import questly/api
+import questly/pubsub
 import questly/swim
 
 pub type Config {
@@ -18,6 +19,7 @@ pub type Config {
     api_port: Int,
     swim_name: process.Name(swim.Message),
     bootstrap_nodes: List(String),
+    pubsub_name: process.Name(pubsub.Message),
   )
 }
 
@@ -43,6 +45,8 @@ pub fn generate_config() -> Config {
     <> list.map(bootstrap_nodes, string.append("    ", _)) |> string.join("\n"),
   )
 
+  let pubsub_name = process.new_name("pubsub")
+
   Config(
     node_id:,
     hostname:,
@@ -52,6 +56,7 @@ pub fn generate_config() -> Config {
     api_port:,
     swim_name:,
     bootstrap_nodes:,
+    pubsub_name:,
   )
 }
 
@@ -67,10 +72,20 @@ fn swim_config(config: Config) -> swim.SwimConfig {
   )
 }
 
+fn pubsub_config(config: Config) -> pubsub.PubsubConfig {
+  pubsub.PubsubConfig(
+    name: config.pubsub_name,
+    swim: swim.from_name(config.swim_name),
+    port: 1337,
+    secret: config.cluster_secret,
+  )
+}
+
 fn api_config(config: Config) -> api.ApiConfig {
   api.ApiConfig(
     port: config.api_port,
     swim: swim.from_name(config.swim_name),
+    pubsub: pubsub.from_name(config.pubsub_name),
     api_secret: config.api_secret,
     cluster_secret: config.cluster_secret,
   )
@@ -79,6 +94,7 @@ fn api_config(config: Config) -> api.ApiConfig {
 pub fn start(config: Config) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(swim_config(config) |> swim.supervised)
+  |> supervisor.add(pubsub_config(config) |> pubsub.supervised)
   |> supervisor.add(api_config(config) |> api.supervised)
   |> supervisor.start()
 }
