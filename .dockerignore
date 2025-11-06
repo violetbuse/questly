@@ -1,0 +1,7 @@
+# flyctl launch added from .gitignore
+**/*.beam
+**/*.ez
+**/.env
+build
+**/erl_crash.dump
+fly.toml
