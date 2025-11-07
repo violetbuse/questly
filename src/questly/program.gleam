@@ -99,6 +99,7 @@ fn api_config(config: Config) -> api.ApiConfig {
     port: config.api_port,
     swim: swim.from_name(config.swim_name),
     pubsub: pubsub.from_name(config.pubsub_name),
+    kv: kv.from_name(config.kv_name),
     api_secret: config.api_secret,
     cluster_secret: config.cluster_secret,
   )

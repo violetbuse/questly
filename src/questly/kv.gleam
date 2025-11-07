@@ -476,3 +476,15 @@ pub fn supervised(config: KvConfig) {
     Ok(start_result)
   })
 }
+
+pub fn get(kv: Kv, key: String) {
+  process.call(kv.subject, 1000, Get(key, _))
+}
+
+pub fn set(kv: Kv, key: String, value: String) {
+  process.send(kv.subject, Put(key, value))
+}
+
+pub fn delete(kv: Kv, key: String) {
+  process.send(kv.subject, Delete(key))
+}
