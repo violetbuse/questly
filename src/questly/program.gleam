@@ -6,6 +6,7 @@ import gleam/list
 import gleam/otp/static_supervisor as supervisor
 import gleam/string
 import questly/api
+import questly/kv
 import questly/pubsub
 import questly/swim
 
@@ -20,6 +21,7 @@ pub type Config {
     swim_name: process.Name(swim.Message),
     bootstrap_nodes: List(String),
     pubsub_name: process.Name(pubsub.Message),
+    kv_name: process.Name(kv.Message),
   )
 }
 
@@ -46,6 +48,7 @@ pub fn generate_config() -> Config {
   )
 
   let pubsub_name = process.new_name("pubsub")
+  let kv_name = process.new_name("kv")
 
   Config(
     node_id:,
@@ -57,6 +60,7 @@ pub fn generate_config() -> Config {
     swim_name:,
     bootstrap_nodes:,
     pubsub_name:,
+    kv_name:,
   )
 }
 
@@ -81,6 +85,15 @@ fn pubsub_config(config: Config) -> pubsub.PubsubConfig {
   )
 }
 
+fn kv_config(config: Config) -> kv.KvConfig {
+  kv.KvConfig(
+    name: config.kv_name,
+    swim: swim.from_name(config.swim_name),
+    port: 1773,
+    secret: config.cluster_secret,
+  )
+}
+
 fn api_config(config: Config) -> api.ApiConfig {
   api.ApiConfig(
     port: config.api_port,
@@ -95,6 +108,7 @@ pub fn start(config: Config) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(swim_config(config) |> swim.supervised)
   |> supervisor.add(pubsub_config(config) |> pubsub.supervised)
+  |> supervisor.add(kv_config(config) |> kv.supervised)
   |> supervisor.add(api_config(config) |> api.supervised)
   |> supervisor.start()
 }

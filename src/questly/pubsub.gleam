@@ -443,7 +443,7 @@ fn handle_event_announcement(
     use from <- decode.field("from", decode.string)
     use events <- decode.field("events", decode.dict(decode.string, decode.int))
 
-    decode.success(#(from, events))
+    decode.success(AnnounceEvents(from_node: from, events:))
   }
 
   let decode = decode.run(json, decoder)
@@ -453,8 +453,8 @@ fn handle_event_announcement(
       json.object([#("error", json.string("Malformed request"))])
       |> json.to_string
       |> wisp.json_response(400)
-    Ok(#(from, events)) -> {
-      process.send(context.pubsub.subject, AnnounceEvents(from, events))
+    Ok(message) -> {
+      process.send(context.pubsub.subject, message)
 
       wisp.ok()
     }
