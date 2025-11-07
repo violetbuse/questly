@@ -48,6 +48,7 @@ pub type Subscription =
 
 pub opaque type Message {
   Heartbeat
+  HealthCheck(recv: process.Subject(Nil))
   LinkApi(pid: process.Pid)
   GetFrom(node_id: String, from: Int, recv: process.Subject(List(Event)))
   Insert(node_id: String, events: List(Event))
@@ -121,6 +122,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
     Unsubscribe(subscription) -> handle_unsubscribe(state, subscription)
     ReplayEvents(since:, filter:, recv:) ->
       handle_replay_events(state, since, filter, recv)
+    HealthCheck(recv:) -> handle_health_check(state, recv)
   }
 }
 
@@ -160,6 +162,14 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
     })
   })
 
+  actor.continue(state)
+}
+
+fn handle_health_check(
+  state: State,
+  recv: process.Subject(Nil),
+) -> actor.Next(State, Message) {
+  process.send(recv, Nil)
   actor.continue(state)
 }
 
@@ -381,10 +391,16 @@ type Context {
 
 fn router(req: wisp.Request, context: Context) -> wisp.Response {
   case wisp.path_segments(req) {
+    ["health"] -> handle_api_health_check(context)
     ["events", node_id, from] -> handle_event_request(node_id, from, context)
     ["announce_events"] -> handle_event_announcement(req, context)
     _ -> wisp.not_found()
   }
+}
+
+fn handle_api_health_check(context: Context) -> wisp.Response {
+  process.call(context.pubsub.subject, 1000, HealthCheck)
+  wisp.ok()
 }
 
 fn handle_event_request(

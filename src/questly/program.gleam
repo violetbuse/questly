@@ -19,9 +19,12 @@ pub type Config {
     api_secret: String,
     api_port: Int,
     swim_name: process.Name(swim.Message),
+    swim_port: Int,
     bootstrap_nodes: List(String),
     pubsub_name: process.Name(pubsub.Message),
+    pubsub_port: Int,
     kv_name: process.Name(kv.Message),
+    kv_port: Int,
   )
 }
 
@@ -35,6 +38,7 @@ pub fn generate_config() -> Config {
   let assert Ok(api_port) = env.get_int("PORT") as "$PORT not set"
 
   let swim_name = process.new_name("swim")
+  let swim_port = env.get_int_or("SWIM_PORT", 8787)
 
   let bootstrap_nodes =
     env.get_string_or("BOOTSTRAP_NODES", "")
@@ -48,7 +52,10 @@ pub fn generate_config() -> Config {
   )
 
   let pubsub_name = process.new_name("pubsub")
+  let pubsub_port = env.get_int_or("PUBSUB_PORT", 1337)
+
   let kv_name = process.new_name("kv")
+  let kv_port = env.get_int_or("KV_PORT", 1773)
 
   Config(
     node_id:,
@@ -58,9 +65,12 @@ pub fn generate_config() -> Config {
     api_secret:,
     api_port:,
     swim_name:,
+    swim_port:,
     bootstrap_nodes:,
     pubsub_name:,
+    pubsub_port:,
     kv_name:,
+    kv_port:,
   )
 }
 
@@ -71,7 +81,7 @@ fn swim_config(config: Config) -> swim.SwimConfig {
     hostname: config.hostname,
     region: config.region,
     bootstrap_hosts: config.bootstrap_nodes,
-    port: 8787,
+    port: config.swim_port,
     secret: config.cluster_secret,
   )
 }
@@ -80,7 +90,7 @@ fn pubsub_config(config: Config) -> pubsub.PubsubConfig {
   pubsub.PubsubConfig(
     name: config.pubsub_name,
     swim: swim.from_name(config.swim_name),
-    port: 1337,
+    port: config.pubsub_port,
     secret: config.cluster_secret,
   )
 }
@@ -89,7 +99,7 @@ fn kv_config(config: Config) -> kv.KvConfig {
   kv.KvConfig(
     name: config.kv_name,
     swim: swim.from_name(config.swim_name),
-    port: 1773,
+    port: config.kv_port,
     secret: config.cluster_secret,
   )
 }

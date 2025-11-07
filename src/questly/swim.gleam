@@ -41,6 +41,7 @@ pub type SwimConfig {
 
 pub opaque type Message {
   Heartbeat
+  HealthCheck(recv: process.Subject(Nil))
   LinkApi(pid: process.Pid)
   IncomingSync(req: SyncRequest, recv: process.Subject(SyncResponse))
   IncomingPing(recv: process.Subject(Nil))
@@ -104,6 +105,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
     YouUpdate(node:) -> handle_you_update(state, node)
     GetNodes(recv:) -> handle_get_nodes(state, recv)
     GetSelf(recv:) -> handle_get_self(state, recv)
+    HealthCheck(recv:) -> handle_health_check(state, recv)
   }
 }
 
@@ -242,6 +244,14 @@ fn sync_candidates(
   })
 }
 
+fn handle_health_check(
+  state: State,
+  recv: process.Subject(Nil),
+) -> actor.Next(State, Message) {
+  process.send(recv, Nil)
+  actor.continue(state)
+}
+
 fn handle_link_api(state: State, pid: process.Pid) -> actor.Next(State, Message) {
   process.link(pid)
   actor.continue(state)
@@ -356,11 +366,17 @@ type Context {
 
 fn router(req: wisp.Request, context: Context) -> wisp.Response {
   case wisp.path_segments(req) {
+    ["health"] -> handle_api_health_check(context)
     ["sync"] -> handle_sync_request(req, context)
     ["ping"] -> handle_ping_request(req, context)
     ["checkup"] -> handle_checkup_request(req, context)
     _ -> wisp.not_found()
   }
+}
+
+fn handle_api_health_check(context: Context) {
+  process.call(context.swim.subject, 1000, HealthCheck)
+  wisp.ok()
 }
 
 type SyncRequest {

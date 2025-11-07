@@ -44,6 +44,7 @@ pub type KvConfig {
 pub opaque type Message {
   Heartbeat
   AntiEntropySync
+  HealthCheck(recv: process.Subject(Nil))
   LinkApi(pid: process.Pid)
   AnnounceTimes(from: String, time_map: dict.Dict(String, Int))
   GetValues(keys: List(String), recv: process.Subject(dict.Dict(String, Value)))
@@ -93,6 +94,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Heartbeat -> handle_heartbeat(state)
     AntiEntropySync -> handle_anti_entropy_sync(state)
+    HealthCheck(recv) -> handle_health_check(state, recv)
     LinkApi(pid:) -> handle_link_api(state, pid)
     AnnounceTimes(from:, time_map:) ->
       handle_announce_times(state, from, time_map)
@@ -142,6 +144,15 @@ const anti_entropy_sync_interval = 60_000
 
 fn handle_anti_entropy_sync(state: State) -> actor.Next(State, Message) {
   process.send_after(state.subject, anti_entropy_sync_interval, AntiEntropySync)
+
+  actor.continue(state)
+}
+
+fn handle_health_check(
+  state: State,
+  recv: process.Subject(Nil),
+) -> actor.Next(State, Message) {
+  process.send(recv, Nil)
 
   actor.continue(state)
 }
@@ -332,10 +343,17 @@ type Context {
 
 fn router(req: wisp.Request, context: Context) -> wisp.Response {
   case wisp.path_segments(req) {
+    ["health"] -> handle_api_health_check(context)
     ["values"] -> handle_value_request(req, context)
     ["announce_times"] -> handle_time_announcement(req, context)
     _ -> wisp.not_found()
   }
+}
+
+fn handle_api_health_check(context: Context) -> wisp.Response {
+  process.call(context.kv.subject, 1000, HealthCheck)
+
+  wisp.ok()
 }
 
 fn handle_value_request(req: wisp.Request, context: Context) -> wisp.Response {
