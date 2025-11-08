@@ -243,7 +243,15 @@ fn handle_delete(state: State, key: String) -> actor.Next(State, Message) {
   let new_value =
     kv_store.read(state.store, key)
     |> result.map(fn(value) {
-      Value(..value, deleted: True, version: int.max(value.version + 1, now))
+      case value.deleted {
+        True -> value
+        False ->
+          Value(
+            ..value,
+            deleted: True,
+            version: int.max(value.version + 1, now),
+          )
+      }
     })
     |> result.unwrap(Value(data: "", deleted: True, version: now))
 
@@ -263,7 +271,15 @@ fn handle_put(
   let new_value =
     kv_store.read(state.store, key)
     |> result.map(fn(value) {
-      Value(..value, deleted: False, version: int.max(value.version + 1, now))
+      case value.deleted == False && value.data == data {
+        True -> value
+        False ->
+          Value(
+            ..value,
+            deleted: False,
+            version: int.max(value.version + 1, now),
+          )
+      }
     })
     |> result.unwrap(Value(data:, deleted: False, version: now))
 
