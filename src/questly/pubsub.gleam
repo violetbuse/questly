@@ -19,6 +19,7 @@ import gleam/string
 import gleam/time/timestamp
 import httpp/send
 import mist
+import questly/debounce
 import questly/pubsub_store.{type Event, Event}
 import questly/swim
 import questly/swim_store
@@ -58,6 +59,7 @@ pub opaque type Message {
     id: String,
     data: String,
     metadata: dict.Dict(String, String),
+    retain_until: Int,
     recv: process.Subject(Event),
   )
   Subscribe(subscription: Subscription, replay_from: option.Option(Int))
@@ -73,6 +75,7 @@ type State {
   State(
     store: pubsub_store.PubsubStore,
     subscribers: set.Set(Subscription),
+    new_message_announcer: debounce.Debouncer(Int),
     subject: process.Subject(Message),
     swim: swim.Swim,
     port: Int,
@@ -89,12 +92,34 @@ fn initialize(
   let assert Ok(pubsub_store) = pubsub_store.new()
     as "pubsub could not start pubsub store"
 
+  let publish = fn(new_time: Int) -> Nil {
+    let alive_nodes =
+      swim.get_remote(config.swim) |> list.filter(swim_store.is_alive)
+    let self_node = swim.get_self(config.swim)
+    let dict = [#(self_node.id, new_time)] |> dict.from_list
+
+    list.each(alive_nodes, fn(node) {
+      process.spawn(fn() {
+        send_event_announcement(
+          host: node.hostname,
+          port: node.pubsub_port,
+          secret: config.secret,
+          from: self_node.id,
+          announce: dict,
+        )
+      })
+    })
+  }
+
+  let new_message_announcer = debounce.new(1000, publish)
+
   let state =
     State(
       store: pubsub_store,
       subscribers: set.new(),
       subject: self,
       swim: config.swim,
+      new_message_announcer: new_message_announcer,
       port: config.port,
       secret: config.secret,
     )
@@ -115,8 +140,8 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
     Insert(node_id:, events:) -> handle_insert(state, node_id, events)
     Heartbeat -> handle_heartbeat(state)
     LinkApi(pid:) -> handle_link_api(state, pid)
-    Publish(channel:, id:, data:, metadata:, recv:) ->
-      handle_publish(state, channel, id, data, metadata, recv)
+    Publish(channel:, id:, data:, metadata:, retain_until:, recv:) ->
+      handle_publish(state, channel, id, data, metadata, retain_until, recv)
     Subscribe(subcription, replay_from) ->
       handle_subscribe(state, subcription, replay_from)
     Unsubscribe(subscription) -> handle_unsubscribe(state, subscription)
@@ -126,7 +151,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   }
 }
 
-const heartbeat_interval = 5000
+const heartbeat_interval = 2000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.send_after(state.subject, heartbeat_interval, Heartbeat)
@@ -154,7 +179,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
 
       send_event_announcement(
         host: node.hostname,
-        port: state.port,
+        port: node.pubsub_port,
         secret: state.secret,
         from: self.id,
         announce: to_announce,
@@ -195,7 +220,7 @@ fn handle_announce_events(
         let event_request =
           send_event_request(
             host: node.hostname,
-            port: state.port,
+            port: node.pubsub_port,
             secret: state.secret,
             for_node: node_id,
             from: local_latest,
@@ -267,6 +292,7 @@ fn handle_publish(
   id: String,
   data: String,
   metadata: dict.Dict(String, String),
+  retain_until: Int,
   recv: process.Subject(Event),
 ) -> actor.Next(State, Message) {
   let self_node_id = swim.get_self(state.swim).id
@@ -278,30 +304,14 @@ fn handle_publish(
     timestamp.system_time() |> timestamp.to_unix_seconds |> float.round
   let time = int.max(current_time, last_time + 1)
 
-  let new_event = Event(channel:, id:, data:, metadata:, time:)
+  let new_event = Event(channel:, id:, data:, metadata:, retain_until:, time:)
   let inserted = pubsub_store.insert(state.store, self_node_id, [new_event])
 
   broadcast(inserted, state)
 
   process.send(recv, new_event)
 
-  process.spawn(fn() {
-    let alive_nodes =
-      swim.get_remote(state.swim) |> list.filter(swim_store.is_alive)
-    let dict = [#(self_node_id, new_event.time)] |> dict.from_list
-
-    list.each(alive_nodes, fn(node) {
-      process.spawn(fn() {
-        send_event_announcement(
-          host: node.hostname,
-          port: state.port,
-          secret: state.secret,
-          from: self_node_id,
-          announce: dict,
-        )
-      })
-    })
-  })
+  debounce.run(state.new_message_announcer, new_event.time)
 
   actor.continue(state)
 }
@@ -544,8 +554,16 @@ pub fn publish(
   id: String,
   data: String,
   metadata: dict.Dict(String, String),
+  retain_until: Int,
 ) -> Event {
-  process.call(pubsub.subject, 1000, Publish(channel, id, data, metadata, _))
+  process.call(pubsub.subject, 1000, Publish(
+    channel,
+    id,
+    data,
+    metadata,
+    retain_until,
+    _,
+  ))
 }
 
 pub fn subscribe(

@@ -1,8 +1,11 @@
 import gleam/bool
 import gleam/dict
+import gleam/float
 import gleam/int
 import gleam/json
 import gleam/result
+import gleam/time/duration
+import gleam/time/timestamp
 import questly/api/api_utils
 import questly/api/context
 import questly/pubsub
@@ -29,7 +32,20 @@ fn handle_publish(
 ) -> wisp.Response {
   use data <- wisp.require_string_body(req)
 
-  pubsub.publish(context.pubsub, channel_name, id, data, dict.new())
+  let one_month_from_now =
+    timestamp.system_time()
+    |> timestamp.add(duration.minutes(31 * 24 * 60))
+    |> timestamp.to_unix_seconds
+    |> float.round
+
+  pubsub.publish(
+    context.pubsub,
+    channel_name,
+    id,
+    data,
+    dict.new(),
+    one_month_from_now,
+  )
   |> pubsub_store.encode_event
   |> json.to_string
   |> wisp.json_response(200)

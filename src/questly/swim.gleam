@@ -11,6 +11,7 @@ import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
+import gleam/string
 import httpp/send
 import mist
 import questly/hash
@@ -36,6 +37,8 @@ pub type SwimConfig {
     bootstrap_hosts: List(String),
     port: Int,
     secret: String,
+    kv_port: Int,
+    pubsub_port: Int,
   )
 }
 
@@ -79,7 +82,10 @@ fn initialize(
         version: 1,
         state: Alive,
         hostname: config.hostname,
+        swim_port: config.port,
         region: config.region,
+        kv_port: config.kv_port,
+        pubsub_port: config.pubsub_port,
       ),
       store: swim_store,
       subject: self,
@@ -120,17 +126,21 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
     let alive_candidates =
       list.filter(nodelist, swim_store.is_alive)
       |> list.sample(3)
-      |> list.map(fn(node) { #(node.hostname, option.Some(node)) })
+      |> list.map(fn(node) {
+        #(node.hostname, node.swim_port, option.Some(node))
+      })
 
     let suspect_candidates =
       list.filter(nodelist, swim_store.is_suspect)
       |> list.sample(int.random(1))
-      |> list.map(fn(node) { #(node.hostname, option.Some(node)) })
+      |> list.map(fn(node) {
+        #(node.hostname, node.swim_port, option.Some(node))
+      })
 
     let dead_candidates =
       list.filter(nodelist, swim_store.is_dead)
       |> list.sample(int.random(1))
-      |> list.map(fn(node) { #(node.hostname, option.None) })
+      |> list.map(fn(node) { #(node.hostname, node.swim_port, option.None) })
 
     let bootstrap_candidates =
       state.bootstrap_hosts
@@ -138,7 +148,16 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
         list.any(nodelist, fn(node) { node.hostname == host }) |> bool.negate
       })
       |> list.sample(2)
-      |> list.map(fn(host) { #(host, option.None) })
+      |> list.map(fn(host) {
+        case string.split_once(host, ":") {
+          Ok(#(hostname, port)) ->
+            case int.parse(port) {
+              Ok(port) -> #(hostname, port, option.None)
+              Error(_) -> #(hostname, state.port, option.None)
+            }
+          Error(_) -> #(host, state.port, option.None)
+        }
+      })
 
     let candidates =
       []
@@ -155,17 +174,17 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
 
 fn sync_candidates(
   state: State,
-  candidates: List(#(String, option.Option(NodeInfo))),
+  candidates: List(#(String, Int, option.Option(NodeInfo))),
 ) {
   let nodelist = swim_store.list_nodes(state.store)
 
   list.each(candidates, fn(node) {
     process.spawn(fn() {
-      let #(host, you) = node
+      let #(host, port, you) = node
       let sync_result =
         send_sync_request(
           host:,
-          port: state.port,
+          port:,
           secret: state.secret,
           send: SyncRequest(
             self: state.self,

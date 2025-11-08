@@ -4,20 +4,24 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/float
 import gleam/function
-import gleam/http
 import gleam/http/request
 import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
 import gleam/string
+import gleam/time/duration
 import gleam/time/timestamp
 import httpp/send
 import mist
 import questly/kv_store.{type Value, Value}
+import questly/pubsub
+import questly/pubsub_store
+import questly/subscriber
 import questly/swim
 import questly/swim_store
 import questly/util
@@ -36,6 +40,7 @@ pub type KvConfig {
   KvConfig(
     name: process.Name(Message),
     swim: swim.Swim,
+    pubsub: pubsub.Pubsub,
     port: Int,
     secret: String,
   )
@@ -59,11 +64,14 @@ type State {
   State(
     store: kv_store.KvStore,
     subject: process.Subject(Message),
+    subscriber: subscriber.Subscriber(Message),
     swim: swim.Swim,
     port: Int,
     secret: String,
   )
 }
+
+const kv_channel = "questly_internal_kv"
 
 fn initialize(
   self: process.Subject(Message),
@@ -73,10 +81,30 @@ fn initialize(
 
   let assert Ok(kv_store) = kv_store.new() as "kv could not start kv store"
 
+  let subscriber_mapper = fn(event: pubsub_store.Event) -> Result(Message, Nil) {
+    use <- bool.guard(when: event.channel != kv_channel, return: Error(Nil))
+
+    let decoder = {
+      use from <- decode.field("from", decode.string)
+      use time_map <- decode.field(
+        "time_map",
+        decode.dict(decode.string, decode.int),
+      )
+
+      decode.success(AnnounceTimes(from:, time_map:))
+    }
+
+    json.parse(event.data, decoder) |> result.replace_error(Nil)
+  }
+
+  let kv_subscriber =
+    subscriber.new(config.pubsub, self, subscriber_mapper, option.None)
+
   let state =
     State(
       store: kv_store,
       subject: self,
+      subscriber: kv_subscriber,
       swim: config.swim,
       port: config.port,
       secret: config.secret,
@@ -107,43 +135,62 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   }
 }
 
-const heartbeat_interval = 10_000
+fn send_time_announcement(
+  subscriber: subscriber.Subscriber(Message),
+  from: swim_store.NodeInfo,
+  time_map: dict.Dict(String, Int),
+) {
+  let data =
+    json.object([
+      #("from", json.string(from.id)),
+      #("time_map", json.dict(time_map, function.identity, json.int)),
+    ])
+    |> json.to_string
+
+  let one_minute =
+    timestamp.system_time()
+    |> timestamp.add(duration.minutes(1))
+    |> timestamp.to_unix_seconds
+    |> float.round
+
+  subscriber.publish(
+    subscriber,
+    kv_channel,
+    "time_announcement",
+    data,
+    dict.new(),
+    one_minute,
+  )
+}
+
+const heartbeat_interval = 3000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.send_after(state.subject, heartbeat_interval, Heartbeat)
 
-  process.spawn(fn() {
-    let self = swim.get_self(state.swim)
-    let candidates =
-      swim.get_remote(state.swim)
-      |> list.filter(swim_store.is_alive)
-      |> list.sample(3)
+  let self = swim.get_self(state.swim)
+  let to_sync =
+    kv_store.sample(state.store, 7)
+    |> list.map(fn(kv) { #(kv.0, { kv.1 }.version) })
+    |> dict.from_list
 
-    list.each(candidates, fn(node) {
-      process.spawn(fn() {
-        let to_sync =
-          kv_store.sample(state.store, 7)
-          |> list.map(fn(kv) { #(kv.0, { kv.1 }.version) })
-          |> dict.from_list
-
-        send_time_announcement(
-          host: node.hostname,
-          port: state.port,
-          secret: state.secret,
-          from: self.id,
-          announce: to_sync,
-        )
-      })
-    })
-  })
+  send_time_announcement(state.subscriber, self, to_sync)
 
   actor.continue(state)
 }
 
-const anti_entropy_sync_interval = 60_000
+const anti_entropy_sync_interval = 600_000
 
 fn handle_anti_entropy_sync(state: State) -> actor.Next(State, Message) {
   process.send_after(state.subject, anti_entropy_sync_interval, AntiEntropySync)
+
+  let self = swim.get_self(state.swim)
+  let to_sync =
+    kv_store.list(state.store, "")
+    |> list.map(fn(kv) { #(kv.0, { kv.1 }.version) })
+    |> dict.from_list
+
+  send_time_announcement(state.subscriber, self, to_sync)
 
   actor.continue(state)
 }
@@ -180,16 +227,15 @@ fn handle_announce_times(
       })
       |> dict.keys
 
-    let host =
+    let node =
       swim.get_remote(state.swim)
       |> list.find(fn(node) { node.id == from })
-      |> result.map(fn(node) { node.hostname })
 
-    use hostname <- result.try(host)
+    use node <- result.try(node)
 
     use values <- result.try(send_value_request(
-      host: hostname,
-      port: state.port,
+      host: node.hostname,
+      port: node.kv_port,
       secret: state.secret,
       keys:,
     ))
@@ -217,27 +263,6 @@ fn handle_get_values(
   actor.continue(state)
 }
 
-fn broadcast_new_version(state: State, key: String, new_time: Int) {
-  process.spawn(fn() {
-    let dict = [#(key, new_time)] |> dict.from_list
-
-    let self = swim.get_self(state.swim)
-    let remote = swim.get_remote(state.swim) |> list.filter(swim_store.is_alive)
-
-    list.each(remote, fn(node) {
-      process.spawn(fn() {
-        send_time_announcement(
-          host: node.hostname,
-          port: state.port,
-          secret: state.secret,
-          from: self.id,
-          announce: dict,
-        )
-      })
-    })
-  })
-}
-
 fn handle_delete(state: State, key: String) -> actor.Next(State, Message) {
   let now = timestamp.system_time() |> timestamp.to_unix_seconds |> float.round
   let new_value =
@@ -257,7 +282,12 @@ fn handle_delete(state: State, key: String) -> actor.Next(State, Message) {
 
   kv_store.write(state.store, key, new_value)
 
-  broadcast_new_version(state, key, new_value.version)
+  let self = swim.get_self(state.swim)
+  send_time_announcement(
+    state.subscriber,
+    self,
+    [#(key, new_value.version)] |> dict.from_list,
+  )
 
   actor.continue(state)
 }
@@ -285,7 +315,13 @@ fn handle_put(
 
   kv_store.write(state.store, key, new_value)
 
-  broadcast_new_version(state, key, new_value.version)
+  // broadcast_new_version(state, key, new_value.version)
+  let self = swim.get_self(state.swim)
+  send_time_announcement(
+    state.subscriber,
+    self,
+    [#(key, new_value.version)] |> dict.from_list,
+  )
 
   actor.continue(state)
 }
@@ -361,7 +397,6 @@ fn router(req: wisp.Request, context: Context) -> wisp.Response {
   case wisp.path_segments(req) {
     ["health"] -> handle_api_health_check(context)
     ["values"] -> handle_value_request(req, context)
-    ["announce_times"] -> handle_time_announcement(req, context)
     _ -> wisp.not_found()
   }
 }
@@ -415,70 +450,6 @@ fn send_value_request(
 
   json.parse(response.body, decode.dict(decode.string, kv_store.decode_value()))
   |> result.replace_error(Nil)
-}
-
-fn handle_time_announcement(
-  req: wisp.Request,
-  context: Context,
-) -> wisp.Response {
-  use <- wisp.require_method(req, http.Post)
-  use <- wisp.require_content_type(req, "application/json")
-  use json <- wisp.require_json(req)
-
-  let decoder = {
-    use from <- decode.field("from", decode.string)
-    use time_map <- decode.field(
-      "time_map",
-      decode.dict(decode.string, decode.int),
-    )
-
-    decode.success(AnnounceTimes(from:, time_map:))
-  }
-
-  let decode = decode.run(json, decoder)
-
-  case decode {
-    Error(_) ->
-      json.object([#("error", json.string("Malformed request"))])
-      |> json.to_string
-      |> wisp.json_response(400)
-    Ok(message) -> {
-      process.send(context.kv.subject, message)
-
-      wisp.ok()
-    }
-  }
-}
-
-fn send_time_announcement(
-  host hostname: String,
-  port port: Int,
-  secret key: String,
-  from node: String,
-  announce times: dict.Dict(String, Int),
-) -> Result(Nil, Nil) {
-  let body =
-    json.object([
-      #("from", json.string(node)),
-      #("time_map", json.dict(times, function.identity, json.int)),
-    ])
-    |> json.to_string
-
-  let assert Ok(request) =
-    request.to(util.internal_url(hostname, port, "/announce_times"))
-    |> result.map(request.set_method(_, http.Post))
-    |> result.map(request.set_header(_, "content-type", "application/json"))
-    |> result.map(request.set_query(_, [#("secret", key)]))
-    |> result.map(request.set_body(_, body))
-    as "could not create event announcement request"
-
-  send.send(request)
-  |> result.map_error(fn(err) {
-    io.println_error("error sending event announcement to " <> hostname)
-    echo err
-  })
-  |> result.replace_error(Nil)
-  |> result.replace(Nil)
 }
 
 fn start_kv_api(kv: Kv, config: KvConfig) {

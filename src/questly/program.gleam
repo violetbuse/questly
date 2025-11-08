@@ -83,6 +83,8 @@ fn swim_config(config: Config) -> swim.SwimConfig {
     bootstrap_hosts: config.bootstrap_nodes,
     port: config.swim_port,
     secret: config.cluster_secret,
+    kv_port: config.kv_port,
+    pubsub_port: config.pubsub_port,
   )
 }
 
@@ -99,6 +101,7 @@ fn kv_config(config: Config) -> kv.KvConfig {
   kv.KvConfig(
     name: config.kv_name,
     swim: swim.from_name(config.swim_name),
+    pubsub: pubsub.from_name(config.pubsub_name),
     port: config.kv_port,
     secret: config.cluster_secret,
   )

@@ -9,34 +9,35 @@ import gleam/time/timestamp
 import questly/pubsub
 import questly/pubsub_store.{type Event}
 
-pub opaque type Subscriber {
-  Subscriber(subject: process.Subject(Message))
+pub opaque type Subscriber(output) {
+  Subscriber(subject: process.Subject(Message(output)))
 }
 
-pub type Filter =
-  fn(Event) -> Bool
+pub type Mapper(output) =
+  fn(Event) -> Result(output, Nil)
 
-pub opaque type Message {
+pub opaque type Message(output) {
   Heartbeat
   Unsubscribe
-  ChangeFilter(new_filter: Filter)
+  ChangeMap(new_map: Mapper(output))
   Publish(
     channel: String,
     id: String,
     data: String,
     metadata: dict.Dict(String, String),
+    retain_until: Int,
   )
   IncomingEvent(Event)
 }
 
-type State {
+type State(output) {
   State(
     pubsub: pubsub.Pubsub,
     receiver: process.Subject(Event),
-    sender: process.Subject(Event),
-    self: process.Subject(Message),
-    selector: process.Selector(Message),
-    filter: Filter,
+    sender: process.Subject(output),
+    self: process.Subject(Message(output)),
+    selector: process.Selector(Message(output)),
+    mapper: Mapper(output),
     owning_process: process.Pid,
     already_received: set.Set(Event),
     latest_received: Int,
@@ -45,10 +46,10 @@ type State {
 
 pub fn new(
   pubsub: pubsub.Pubsub,
-  client_receiver: process.Subject(Event),
-  filter initial: Filter,
+  recv client_receiver: process.Subject(output),
+  map initial: Mapper(output),
   from replay: option.Option(Int),
-) -> Result(Subscriber, Nil) {
+) -> Subscriber(output) {
   let get_subscriber = process.new_subject()
   let owning_process = process.self()
 
@@ -77,7 +78,7 @@ pub fn new(
         self:,
         selector:,
         owning_process:,
-        filter: initial,
+        mapper: initial,
         already_received: set.new(),
         latest_received: replay |> option.unwrap(now),
       )
@@ -85,31 +86,36 @@ pub fn new(
     loop(state)
   })
 
-  process.receive(get_subscriber, 1000)
+  let assert Ok(subscriber) = process.receive(get_subscriber, 1000)
+  subscriber
 }
 
-fn loop(state: State) -> State {
+fn loop(state: State(output)) -> State(output) {
   let message = process.selector_receive_forever(state.selector)
 
   let new_state = case message {
     Heartbeat -> handle_heartbeat(state)
-    ChangeFilter(new_filter:) -> handle_change_filter(state, new_filter)
+    ChangeMap(new_map:) -> handle_change_mapper(state, new_map)
     IncomingEvent(event) -> handle_incoming_event(state, event)
-    Publish(channel:, id:, data:, metadata:) ->
-      handle_publish(state, channel, id, data, metadata)
+    Publish(channel:, id:, data:, metadata:, retain_until:) ->
+      handle_publish(state, channel, id, data, metadata, retain_until)
     Unsubscribe -> handle_unsubscribe(state)
   }
 
   loop(new_state)
 }
 
+fn filter_any(_event: Event) -> Bool {
+  True
+}
+
 const heartbeat_interval = 30_000
 
-fn handle_heartbeat(state: State) -> State {
+fn handle_heartbeat(state: State(output)) -> State(output) {
   pubsub.subscribe(
     state.pubsub,
     state.receiver,
-    state.filter,
+    filter_any,
     option.Some(state.latest_received),
   )
 
@@ -118,24 +124,27 @@ fn handle_heartbeat(state: State) -> State {
   state
 }
 
-fn handle_change_filter(state: State, filter: Filter) -> State {
-  pubsub.unsubscribe(state.pubsub, state.receiver, state.filter)
-  pubsub.subscribe(
-    state.pubsub,
-    state.receiver,
-    filter,
-    option.Some(state.latest_received),
-  )
-
-  State(..state, filter:)
+fn handle_change_mapper(
+  state: State(output),
+  mapper: Mapper(output),
+) -> State(output) {
+  State(..state, mapper:)
 }
 
-fn handle_incoming_event(state: State, event: Event) -> State {
-  let should_send = set.contains(state.already_received, event) |> bool.negate
+fn handle_incoming_event(state: State(output), event: Event) -> State(output) {
+  let _ = {
+    use <- bool.guard(
+      when: set.contains(state.already_received, event),
+      return: Nil,
+    )
 
-  case should_send {
-    False -> Nil
-    True -> process.send(state.sender, event)
+    case state.mapper(event) {
+      Error(_) -> Nil
+      Ok(mapped) -> {
+        process.send(state.sender, mapped)
+        Nil
+      }
+    }
   }
 
   State(
@@ -146,23 +155,47 @@ fn handle_incoming_event(state: State, event: Event) -> State {
 }
 
 fn handle_publish(
-  state: State,
+  state: State(output),
   channel: String,
   id: String,
   data: String,
   metadata: dict.Dict(String, String),
-) -> State {
-  let event = pubsub.publish(state.pubsub, channel, id, data, metadata)
+  retain_until: Int,
+) -> State(output) {
+  let event =
+    pubsub.publish(state.pubsub, channel, id, data, metadata, retain_until)
 
   State(..state, already_received: set.insert(state.already_received, event))
 }
 
-fn handle_unsubscribe(state: State) -> State {
-  pubsub.unsubscribe(state.pubsub, state.receiver, state.filter)
+fn handle_unsubscribe(state: State(output)) -> State(output) {
+  pubsub.unsubscribe(state.pubsub, state.receiver, filter_any)
 
   process.unlink(state.owning_process)
   let assert Ok(pid) = process.subject_owner(state.self)
   process.kill(pid)
 
   state
+}
+
+pub fn change_map(subscriber: Subscriber(output), mapper: Mapper(output)) {
+  process.send(subscriber.subject, ChangeMap(mapper))
+}
+
+pub fn close(subscriber: Subscriber(output)) {
+  process.send(subscriber.subject, Unsubscribe)
+}
+
+pub fn publish(
+  subscriber: Subscriber(output),
+  channel: String,
+  id: String,
+  data: String,
+  metadata: dict.Dict(String, String),
+  retain_until: Int,
+) {
+  process.send(
+    subscriber.subject,
+    Publish(channel:, id:, data:, metadata:, retain_until:),
+  )
 }
