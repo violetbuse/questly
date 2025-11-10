@@ -228,7 +228,7 @@ fn on_request(
   |> wisp.json_response(200)
 }
 
-fn send_request(
+fn internal_send_request(
   node: NodeInfo,
   message: message,
   state: State(message, response, client),
@@ -301,14 +301,14 @@ fn on_message(
         Ok(Nil)
       }
       SendBlocking(node:, message:, recv:) -> {
-        use response <- result.try(send_request(node, message, state))
+        use response <- result.try(internal_send_request(node, message, state))
 
         process.send(recv, response)
 
         Ok(Nil)
       }
       SendMessage(node:, message:) -> {
-        use response <- result.try(send_request(node, message, state))
+        use response <- result.try(internal_send_request(node, message, state))
         let client = state.response_mapper(response)
         process.send(state.sender, client)
 
@@ -337,4 +337,23 @@ pub fn start(builder: Builder(a, b, c)) {
       Ok(start_result.data)
     }
   }
+}
+
+pub fn send_request(
+  channel: Channel(message, response),
+  node: NodeInfo,
+  message: message,
+) -> Nil {
+  process.send(channel.subject, SendMessage(node, message))
+}
+
+pub fn send_blocking(
+  channel: Channel(message, response),
+  node: NodeInfo,
+  message: message,
+  timeout: Int,
+) -> Result(response, Nil) {
+  let recv = process.new_subject()
+  process.send(channel.subject, SendBlocking(node, message, recv))
+  process.receive(recv, timeout)
 }
