@@ -98,7 +98,7 @@ fn initialize(
   }
 
   let kv_subscriber =
-    subscriber.new(config.pubsub, self, subscriber_mapper, option.None)
+    subscriber.new(config.pubsub, self, subscriber_mapper, option.Some(0))
 
   let state =
     State(
@@ -163,7 +163,7 @@ fn send_time_announcement(
   )
 }
 
-const heartbeat_interval = 3000
+const heartbeat_interval = 10_000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.send_after(state.subject, heartbeat_interval, Heartbeat)

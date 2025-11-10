@@ -4,7 +4,6 @@ import gleam/option
 import questly/api/api_utils
 import questly/api/context
 import questly/kv
-import questly/kv_store
 import wisp
 
 pub fn router(req: wisp.Request, context: context.ApiContext) -> wisp.Response {
@@ -21,7 +20,8 @@ pub fn router(req: wisp.Request, context: context.ApiContext) -> wisp.Response {
 fn handle_get_value(key: String, context: context.ApiContext) -> wisp.Response {
   kv.get(context.kv, key)
   |> option.from_result
-  |> json.nullable(kv_store.encode_value)
+  |> option.map(fn(value) { value.data })
+  |> json.nullable(json.string)
   |> json.to_string
   |> wisp.json_response(200)
 }
