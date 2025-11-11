@@ -1,3 +1,4 @@
+import gleam/bool
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http/request
@@ -140,7 +141,7 @@ pub opaque type Message(message, response) {
   SendBlocking(
     node: NodeInfo,
     message: message,
-    recv: process.Subject(response),
+    recv: process.Subject(Result(response, Nil)),
   )
   HandleRequest(body: String, recv: process.Subject(json.Json))
 }
@@ -221,6 +222,9 @@ fn on_request(
   req: wisp.Request,
   self: process.Subject(Message(message, response)),
 ) -> wisp.Response {
+  let path = wisp.path_segments(req)
+  use <- bool.guard(when: path == ["health"], return: wisp.ok())
+
   use body <- wisp.require_string_body(req)
 
   process.call_forever(self, HandleRequest(body, _))
@@ -301,7 +305,13 @@ fn on_message(
         Ok(Nil)
       }
       SendBlocking(node:, message:, recv:) -> {
-        use response <- result.try(internal_send_request(node, message, state))
+        let response =
+          internal_send_request(node, message, state)
+          |> result.map_error(fn(error) {
+            io.println_error("Error sending message to channel")
+            io.println_error(error)
+            Nil
+          })
 
         process.send(recv, response)
 
@@ -355,5 +365,5 @@ pub fn send_blocking(
 ) -> Result(response, Nil) {
   let recv = process.new_subject()
   process.send(channel.subject, SendBlocking(node, message, recv))
-  process.receive(recv, timeout)
+  process.receive(recv, timeout) |> result.flatten
 }

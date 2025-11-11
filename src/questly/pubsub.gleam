@@ -4,8 +4,6 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/float
 import gleam/function
-import gleam/http
-import gleam/http/request
 import gleam/int
 import gleam/io
 import gleam/json
@@ -15,17 +13,12 @@ import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
 import gleam/set
-import gleam/string
 import gleam/time/timestamp
-import httpp/send
-import mist
 import questly/debounce
+import questly/network_channel
 import questly/pubsub_store.{type Event, Event}
 import questly/swim
 import questly/swim_store
-import questly/util
-import wisp
-import wisp/wisp_mist
 
 pub opaque type Pubsub {
   Pubsub(subject: process.Subject(Message))
@@ -48,10 +41,11 @@ pub type Subscription =
   #(process.Subject(Event), fn(Event) -> Bool)
 
 pub opaque type Message {
+  Noop
   Heartbeat
   HealthCheck(recv: process.Subject(Nil))
   LinkApi(pid: process.Pid)
-  GetFrom(node_id: String, from: Int, recv: process.Subject(List(Event)))
+  GetFrom(node_id: String, from: Int, recv: process.Subject(Response))
   Insert(node_id: String, events: List(Event))
   AnnounceEvents(from_node: String, events: dict.Dict(String, Int))
   Publish(
@@ -75,6 +69,7 @@ type State {
   State(
     store: pubsub_store.PubsubStore,
     subscribers: set.Set(Subscription),
+    network_channel: network_channel.Channel(Request, Response),
     new_message_announcer: debounce.Debouncer(Int),
     subject: process.Subject(Message),
     swim: swim.Swim,
@@ -92,6 +87,20 @@ fn initialize(
   let assert Ok(pubsub_store) = pubsub_store.new()
     as "pubsub could not start pubsub store"
 
+  let assert Ok(network_channel) =
+    network_channel.new()
+    |> network_channel.port(config.port)
+    |> network_channel.get_port(get_port)
+    |> network_channel.encode_message(encode_request)
+    |> network_channel.decode_message(decode_request())
+    |> network_channel.message_mapper(request_map)
+    |> network_channel.encode_response(encode_response)
+    |> network_channel.decode_response(decode_response())
+    |> network_channel.response_mapper(response_map)
+    |> network_channel.sender(self)
+    |> network_channel.cluster_secret(config.secret)
+    |> network_channel.start
+
   let publish = fn(new_time: Int) -> Nil {
     let alive_nodes =
       swim.get_remote(config.swim) |> list.filter(swim_store.is_alive)
@@ -100,12 +109,10 @@ fn initialize(
 
     list.each(alive_nodes, fn(node) {
       process.spawn(fn() {
-        send_event_announcement(
-          host: node.hostname,
-          port: node.pubsub_port,
-          secret: config.secret,
-          from: self_node.id,
-          announce: dict,
+        network_channel.send_request(
+          network_channel,
+          node,
+          EventAnnouncement(self_node, dict),
         )
       })
     })
@@ -118,6 +125,7 @@ fn initialize(
       store: pubsub_store,
       subscribers: set.new(),
       subject: self,
+      network_channel: network_channel,
       swim: config.swim,
       new_message_announcer: new_message_announcer,
       port: config.port,
@@ -133,6 +141,7 @@ fn initialize(
 
 fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
+    Noop -> actor.continue(state)
     AnnounceEvents(from_node:, events:) ->
       handle_announce_events(state, from_node, events)
     GetFrom(node_id:, from:, recv:) ->
@@ -177,12 +186,17 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
         })
         |> dict.from_list
 
-      send_event_announcement(
-        host: node.hostname,
-        port: node.pubsub_port,
-        secret: state.secret,
-        from: self.id,
-        announce: to_announce,
+      // send_event_announcement(
+      //   host: node.hostname,
+      //   port: node.pubsub_port,
+      //   secret: state.secret,
+      //   from: self.id,
+      //   announce: to_announce,
+      // )
+      network_channel.send_request(
+        state.network_channel,
+        node,
+        EventAnnouncement(self, to_announce),
       )
     })
   })
@@ -217,22 +231,13 @@ fn handle_announce_events(
 
         use <- bool.guard(when: local_latest >= remote_latest, return: Ok(Nil))
 
-        let event_request =
-          send_event_request(
-            host: node.hostname,
-            port: node.pubsub_port,
-            secret: state.secret,
-            for_node: node_id,
-            from: local_latest,
-          )
+        network_channel.send_request(
+          state.network_channel,
+          node,
+          RequestEvents(node_id, local_latest),
+        )
 
-        case event_request {
-          Error(_) -> Error(Nil)
-          Ok(new_events) -> {
-            process.send(state.subject, Insert(node_id:, events: new_events))
-            Ok(Nil)
-          }
-        }
+        Ok(Nil)
       })
     })
 
@@ -252,10 +257,10 @@ fn handle_get_from(
   state: State,
   node_id: String,
   from: Int,
-  recv: process.Subject(List(Event)),
+  recv: process.Subject(Response),
 ) -> actor.Next(State, Message) {
-  pubsub_store.get_from(state.store, node_id, from)
-  |> process.send(recv, _)
+  let events = pubsub_store.get_from(state.store, node_id, from)
+  process.send(recv, Events(node_id, events))
 
   actor.continue(state)
 }
@@ -395,156 +400,263 @@ fn start_pubsub_actor(
   }
 }
 
-type Context {
-  Context(pubsub: Pubsub)
+fn get_port(node: swim_store.NodeInfo) -> Int {
+  node.pubsub_port
 }
 
-fn router(req: wisp.Request, context: Context) -> wisp.Response {
-  case wisp.path_segments(req) {
-    ["health"] -> handle_api_health_check(context)
-    ["events", node_id, from] -> handle_event_request(node_id, from, context)
-    ["announce_events"] -> handle_event_announcement(req, context)
-    _ -> wisp.not_found()
+type Request {
+  RequestEvents(node_id: String, from_time: Int)
+  EventAnnouncement(
+    source_node: swim_store.NodeInfo,
+    events: dict.Dict(String, Int),
+  )
+}
+
+fn encode_request(req: Request) -> json.Json {
+  case req {
+    EventAnnouncement(source_node:, events:) ->
+      json.object([
+        #("type", json.string("event_announcement")),
+        #("source_node", swim_store.encode_node_info(source_node)),
+        #("events", json.dict(events, function.identity, json.int)),
+      ])
+    RequestEvents(node_id:, from_time:) ->
+      json.object([
+        #("type", json.string("request_events")),
+        #("node_id", json.string(node_id)),
+        #("from_time", json.int(from_time)),
+      ])
   }
 }
 
-fn handle_api_health_check(context: Context) -> wisp.Response {
-  process.call(context.pubsub.subject, 1000, HealthCheck)
-  wisp.ok()
-}
-
-fn handle_event_request(
-  node_id: String,
-  from: String,
-  context: Context,
-) -> wisp.Response {
-  let malformed = wisp.response(400)
-  let from_parsed = int.parse(from)
-  use <- bool.guard(when: result.is_error(from_parsed), return: malformed)
-  let assert Ok(from) = from_parsed
-
-  let events =
-    process.call(context.pubsub.subject, 1000, GetFrom(node_id, from, _))
-  let data = json.array(events, pubsub_store.encode_event) |> json.to_string
-
-  wisp.json_response(data, 200)
-}
-
-fn send_event_request(
-  host hostname: String,
-  port port: Int,
-  secret key: String,
-  for_node id: String,
-  from time: Int,
-) -> Result(List(Event), Nil) {
-  let path = string.join(["/events", id, int.to_string(time)], "/")
-  let assert Ok(request) =
-    request.to(util.internal_url(hostname, port, path))
-    |> result.map(request.set_query(_, [#("secret", key)]))
-    as "could not create event request request"
-
-  let server_response =
-    send.send(request)
-    |> result.map_error(fn(err) {
-      io.println_error("Error sending event request to" <> hostname)
-      echo err
-    })
-    |> result.replace_error(Nil)
-
-  use response <- result.try(server_response)
-
-  json.parse(response.body, decode.list(pubsub_store.decode_event()))
-  |> result.replace_error(Nil)
-}
-
-fn handle_event_announcement(
-  req: wisp.Request,
-  context: Context,
-) -> wisp.Response {
-  use <- wisp.require_method(req, http.Post)
-  use <- wisp.require_content_type(req, "application/json")
-  use json <- wisp.require_json(req)
-
-  let decoder = {
-    use from <- decode.field("from", decode.string)
+fn decode_request() -> decode.Decoder(Request) {
+  let event_announcement_decoder = {
+    use source_node <- decode.field(
+      "source_node",
+      swim_store.decode_node_info(),
+    )
     use events <- decode.field("events", decode.dict(decode.string, decode.int))
-
-    decode.success(AnnounceEvents(from_node: from, events:))
+    decode.success(EventAnnouncement(source_node:, events:))
   }
 
-  let decode = decode.run(json, decoder)
+  let request_events_decoder = {
+    use node_id <- decode.field("node_id", decode.string)
+    use from_time <- decode.field("from_time", decode.int)
+    decode.success(RequestEvents(node_id:, from_time:))
+  }
 
-  case decode {
-    Error(_) ->
-      json.object([#("error", json.string("Malformed request"))])
-      |> json.to_string
-      |> wisp.json_response(400)
-    Ok(message) -> {
-      process.send(context.pubsub.subject, message)
+  use tag <- decode.field("type", decode.string)
+  case tag {
+    "event_announcement" -> event_announcement_decoder
+    "request_events" -> request_events_decoder
+    _ -> decode.failure(RequestEvents("", 0), "PubsubRequest")
+  }
+}
 
-      wisp.ok()
+fn request_map(req: Request, response: process.Subject(Response)) -> Message {
+  case req {
+    EventAnnouncement(source_node:, events:) -> {
+      process.send(response, Acknowledged)
+      AnnounceEvents(source_node.id, events:)
     }
+    RequestEvents(node_id:, from_time:) ->
+      GetFrom(node_id:, from: from_time, recv: response)
   }
 }
 
-fn send_event_announcement(
-  host hostname: String,
-  port port: Int,
-  secret key: String,
-  from node: String,
-  announce events: dict.Dict(String, Int),
-) -> Result(Nil, Nil) {
-  let body =
-    json.object([
-      #("from", json.string(node)),
-      #("events", json.dict(events, function.identity, json.int)),
-    ])
-    |> json.to_string
-
-  let assert Ok(request) =
-    request.to(util.internal_url(hostname, port, "/announce_events"))
-    |> result.map(request.set_method(_, http.Post))
-    |> result.map(request.set_header(_, "content-type", "application/json"))
-    |> result.map(request.set_query(_, [#("secret", key)]))
-    |> result.map(request.set_body(_, body))
-    as "could not create event announcement request"
-
-  send.send(request)
-  |> result.map_error(fn(err) {
-    io.println_error("error sending event announcement to " <> hostname)
-    echo err
-  })
-  |> result.replace_error(Nil)
-  |> result.replace(Nil)
+type Response {
+  Events(node_id: String, events: List(Event))
+  Acknowledged
 }
 
-fn start_pubsub_api(pubsub: Pubsub, config: PubsubConfig) {
-  wisp.configure_logger()
-
-  let context = Context(pubsub:)
-  let start_result =
-    wisp_mist.handler(router(_, context), config.secret)
-    |> mist.new
-    |> mist.bind("0.0.0.0")
-    |> mist.with_ipv6
-    |> mist.port(config.port)
-    |> mist.start
-
-  start_result
-  |> result.replace_error(actor.InitFailed("Failed to start pubsub api"))
+fn encode_response(res: Response) -> json.Json {
+  case res {
+    Acknowledged -> json.object([#("type", json.string("acknowledged"))])
+    Events(node_id:, events:) ->
+      json.object([
+        #("type", json.string("events")),
+        #("node_id", json.string(node_id)),
+        #("events", json.array(events, pubsub_store.encode_event)),
+      ])
+  }
 }
+
+fn decode_response() -> decode.Decoder(Response) {
+  let events_decoder = {
+    use node_id <- decode.field("node_id", decode.string)
+    use events <- decode.field(
+      "events",
+      decode.list(pubsub_store.decode_event()),
+    )
+    decode.success(Events(node_id:, events:))
+  }
+
+  use tag <- decode.field("type", decode.string)
+  case tag {
+    "acknowledged" -> decode.success(Acknowledged)
+    "events" -> events_decoder
+    _ -> decode.failure(Acknowledged, "PubsubResponse")
+  }
+}
+
+fn response_map(res: Response) -> Message {
+  case res {
+    Acknowledged -> Noop
+    Events(node_id:, events:) -> Insert(node_id:, events:)
+  }
+}
+
+// type Context {
+//   Context(pubsub: Pubsub)
+// }
+
+// fn router(req: wisp.Request, context: Context) -> wisp.Response {
+//   case wisp.path_segments(req) {
+//     ["health"] -> handle_api_health_check(context)
+//     ["events", node_id, from] -> handle_event_request(node_id, from, context)
+//     ["announce_events"] -> handle_event_announcement(req, context)
+//     _ -> wisp.not_found()
+//   }
+// }
+
+// fn handle_api_health_check(context: Context) -> wisp.Response {
+//   process.call(context.pubsub.subject, 1000, HealthCheck)
+//   wisp.ok()
+// }
+
+// fn handle_event_request(
+//   node_id: String,
+//   from: String,
+//   context: Context,
+// ) -> wisp.Response {
+//   let malformed = wisp.response(400)
+//   let from_parsed = int.parse(from)
+//   use <- bool.guard(when: result.is_error(from_parsed), return: malformed)
+//   let assert Ok(from) = from_parsed
+
+//   let events =
+//     process.call(context.pubsub.subject, 1000, GetFrom(node_id, from, _))
+//   let data = json.array(events, pubsub_store.encode_event) |> json.to_string
+
+//   wisp.json_response(data, 200)
+// }
+
+// fn send_event_request(
+//   host hostname: String,
+//   port port: Int,
+//   secret key: String,
+//   for_node id: String,
+//   from time: Int,
+// ) -> Result(List(Event), Nil) {
+//   let path = string.join(["/events", id, int.to_string(time)], "/")
+//   let assert Ok(request) =
+//     request.to(util.internal_url(hostname, port, path))
+//     |> result.map(request.set_query(_, [#("secret", key)]))
+//     as "could not create event request request"
+
+//   let server_response =
+//     send.send(request)
+//     |> result.map_error(fn(err) {
+//       io.println_error("Error sending event request to" <> hostname)
+//       echo err
+//     })
+//     |> result.replace_error(Nil)
+
+//   use response <- result.try(server_response)
+
+//   json.parse(response.body, decode.list(pubsub_store.decode_event()))
+//   |> result.replace_error(Nil)
+// }
+
+// fn handle_event_announcement(
+//   req: wisp.Request,
+//   context: Context,
+// ) -> wisp.Response {
+//   use <- wisp.require_method(req, http.Post)
+//   use <- wisp.require_content_type(req, "application/json")
+//   use json <- wisp.require_json(req)
+
+//   let decoder = {
+//     use from <- decode.field("from", decode.string)
+//     use events <- decode.field("events", decode.dict(decode.string, decode.int))
+
+//     decode.success(AnnounceEvents(from_node: from, events:))
+//   }
+
+//   let decode = decode.run(json, decoder)
+
+//   case decode {
+//     Error(_) ->
+//       json.object([#("error", json.string("Malformed request"))])
+//       |> json.to_string
+//       |> wisp.json_response(400)
+//     Ok(message) -> {
+//       process.send(context.pubsub.subject, message)
+
+//       wisp.ok()
+//     }
+//   }
+// }
+
+// fn send_event_announcement(
+//   host hostname: String,
+//   port port: Int,
+//   secret key: String,
+//   from node: String,
+//   announce events: dict.Dict(String, Int),
+// ) -> Result(Nil, Nil) {
+//   let body =
+//     json.object([
+//       #("from", json.string(node)),
+//       #("events", json.dict(events, function.identity, json.int)),
+//     ])
+//     |> json.to_string
+
+//   let assert Ok(request) =
+//     request.to(util.internal_url(hostname, port, "/announce_events"))
+//     |> result.map(request.set_method(_, http.Post))
+//     |> result.map(request.set_header(_, "content-type", "application/json"))
+//     |> result.map(request.set_query(_, [#("secret", key)]))
+//     |> result.map(request.set_body(_, body))
+//     as "could not create event announcement request"
+
+//   send.send(request)
+//   |> result.map_error(fn(err) {
+//     io.println_error("error sending event announcement to " <> hostname)
+//     echo err
+//   })
+//   |> result.replace_error(Nil)
+//   |> result.replace(Nil)
+// }
+
+// fn start_pubsub_api(pubsub: Pubsub, config: PubsubConfig) {
+//   wisp.configure_logger()
+
+//   let context = Context(pubsub:)
+//   let start_result =
+//     wisp_mist.handler(router(_, context), config.secret)
+//     |> mist.new
+//     |> mist.bind("0.0.0.0")
+//     |> mist.with_ipv6
+//     |> mist.port(config.port)
+//     |> mist.start
+
+//   start_result
+//   |> result.replace_error(actor.InitFailed("Failed to start pubsub api"))
+// }
 
 pub fn supervised(config: PubsubConfig) {
   supervision.worker(fn() {
-    use actor.Started(_, pubsub) as start_result <- result.try(
-      start_pubsub_actor(config),
-    )
+    // use actor.Started(_, pubsub) as start_result <- result.try(
+    //   start_pubsub_actor(config),
+    // )
 
-    use actor.Started(api_pid, _) <- result.try(start_pubsub_api(pubsub, config))
+    // use actor.Started(api_pid, _) <- result.try(start_pubsub_api(pubsub, config))
 
-    process.send(pubsub.subject, LinkApi(api_pid))
+    // process.send(pubsub.subject, LinkApi(api_pid))
 
-    Ok(start_result)
+    // Ok(start_result)
+    start_pubsub_actor(config)
   })
 }
 
