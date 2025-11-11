@@ -112,7 +112,7 @@ fn initialize(
         network_channel.send_request(
           network_channel,
           node,
-          EventAnnouncement(self_node, dict),
+          EventAnnouncement(self_node.id, dict),
         )
       })
     })
@@ -189,7 +189,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
       network_channel.send_request(
         state.network_channel,
         node,
-        EventAnnouncement(self, to_announce),
+        EventAnnouncement(self.id, to_announce),
       )
     })
   })
@@ -399,10 +399,7 @@ fn get_port(node: swim_store.NodeInfo) -> Int {
 
 type Request {
   RequestEvents(node_id: String, from_time: Int)
-  EventAnnouncement(
-    source_node: swim_store.NodeInfo,
-    events: dict.Dict(String, Int),
-  )
+  EventAnnouncement(source_node: String, events: dict.Dict(String, Int))
 }
 
 fn encode_request(req: Request) -> json.Json {
@@ -410,7 +407,7 @@ fn encode_request(req: Request) -> json.Json {
     EventAnnouncement(source_node:, events:) ->
       json.object([
         #("type", json.string("event_announcement")),
-        #("source_node", swim_store.encode_node_info(source_node)),
+        #("source_node", json.string(source_node)),
         #("events", json.dict(events, function.identity, json.int)),
       ])
     RequestEvents(node_id:, from_time:) ->
@@ -424,10 +421,7 @@ fn encode_request(req: Request) -> json.Json {
 
 fn decode_request() -> decode.Decoder(Request) {
   let event_announcement_decoder = {
-    use source_node <- decode.field(
-      "source_node",
-      swim_store.decode_node_info(),
-    )
+    use source_node <- decode.field("source_node", decode.string)
     use events <- decode.field("events", decode.dict(decode.string, decode.int))
     decode.success(EventAnnouncement(source_node:, events:))
   }
@@ -450,7 +444,7 @@ fn request_map(req: Request, response: process.Subject(Response)) -> Message {
   case req {
     EventAnnouncement(source_node:, events:) -> {
       process.send(response, Acknowledged)
-      AnnounceEvents(source_node.id, events:)
+      AnnounceEvents(source_node, events:)
     }
     RequestEvents(node_id:, from_time:) ->
       GetFrom(node_id:, from: from_time, recv: response)

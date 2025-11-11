@@ -4,7 +4,7 @@
 #
 
 app = 'questly'
-primary_region = 'fra'
+primary_region = 'iad'
 swap_size_mb = 512
 
 [env]
