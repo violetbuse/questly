@@ -245,17 +245,6 @@ fn handle_announce_times(
 
     use node <- result.try(node)
 
-    // use values <- result.try(send_value_request(
-    //   host: node.hostname,
-    //   port: node.kv_port,
-    //   secret: state.secret,
-    //   keys:,
-    // ))
-
-    // dict.each(values, fn(k, v) {
-    //   process.send(state.subject, IncomingUpdate(k, v))
-    // })
-
     network_channel.send_request(
       state.network_channel,
       node,
@@ -334,7 +323,6 @@ fn handle_put(
 
   kv_store.write(state.store, key, new_value)
 
-  // broadcast_new_version(state, key, new_value.version)
   let self = swim.get_self(state.swim)
   send_time_announcement(
     state.subscriber,
@@ -490,98 +478,8 @@ fn response_map(res: Response) -> Message {
   }
 }
 
-// type Context {
-//   Context(kv: Kv)
-// }
-
-// fn router(req: wisp.Request, context: Context) -> wisp.Response {
-//   case wisp.path_segments(req) {
-//     ["health"] -> handle_api_health_check(context)
-//     ["values"] -> handle_value_request(req, context)
-//     _ -> wisp.not_found()
-//   }
-// }
-
-// fn handle_api_health_check(context: Context) -> wisp.Response {
-//   process.call(context.kv.subject, 1000, HealthCheck)
-
-//   wisp.ok()
-// }
-
-// fn handle_value_request(req: wisp.Request, context: Context) -> wisp.Response {
-//   let keys =
-//     wisp.get_query(req)
-//     |> list.key_find("keys")
-//     |> result.unwrap("")
-//     |> string.split(",")
-//     |> list.map(string.trim)
-//     |> list.filter(fn(str) { string.is_empty(str) |> bool.negate })
-
-//   let values = process.call(context.kv.subject, 1000, GetValues(keys, _))
-
-//   json.dict(values, function.identity, kv_store.encode_value)
-//   |> json.to_string
-//   |> wisp.json_response(200)
-// }
-
-// fn send_value_request(
-//   host hostname: String,
-//   port port: Int,
-//   secret key: String,
-//   keys keys: List(String),
-// ) -> Result(dict.Dict(String, Value), Nil) {
-//   let keys_list = string.join(keys, ",")
-
-//   let assert Ok(request) =
-//     request.to(util.internal_url(hostname, port, "/values"))
-//     |> result.map(
-//       request.set_query(_, [#("secret", key), #("keys", keys_list)]),
-//     )
-//     as "could not create value request request"
-
-//   let server_response =
-//     send.send(request)
-//     |> result.map_error(fn(err) {
-//       io.println_error("Error sending value request to" <> hostname)
-//       echo err
-//     })
-//     |> result.replace_error(Nil)
-
-//   use response <- result.try(server_response)
-
-//   json.parse(response.body, decode.dict(decode.string, kv_store.decode_value()))
-//   |> result.replace_error(Nil)
-// }
-
-// fn start_kv_api(kv: Kv, config: KvConfig) {
-//   wisp.configure_logger()
-
-//   let context = Context(kv:)
-//   let start_result =
-//     wisp_mist.handler(router(_, context), config.secret)
-//     |> mist.new
-//     |> mist.bind("0.0.0.0")
-//     |> mist.with_ipv6
-//     |> mist.port(config.port)
-//     |> mist.start
-
-//   start_result
-//   |> result.replace_error(actor.InitFailed("Failed to start kv api"))
-// }
-
 pub fn supervised(config: KvConfig) {
-  supervision.worker(fn() {
-    // use actor.Started(_, kv) as start_result <- result.try(start_kv_actor(
-    //   config,
-    // ))
-
-    // use actor.Started(api_pid, _) <- result.try(start_kv_api(kv, config))
-
-    // process.send(kv.subject, LinkApi(api_pid))
-
-    // Ok(start_result)
-    start_kv_actor(config)
-  })
+  supervision.worker(fn() { start_kv_actor(config) })
 }
 
 pub fn get(kv: Kv, key: String) {
