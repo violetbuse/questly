@@ -23,6 +23,7 @@ pub type Config {
     api_port: Int,
     db_name: process.Name(pog.Message),
     db_url: String,
+    db_pool_size: Int,
     swim_name: process.Name(swim.Message),
     swim_port: Int,
     bootstrap_nodes: List(String),
@@ -45,6 +46,7 @@ pub fn generate_config() -> Config {
   let db_name = process.new_name("database_pool")
   let assert Ok(db_url) = env.get_string("POSTGRES_URL")
     as "$POSTGRES_URL not set"
+  let db_pool_size = env.get_int_or("POSTGRES_POOL_SIZE", 10)
 
   let swim_name = process.new_name("swim")
   let swim_port = env.get_int_or("SWIM_PORT", 8787)
@@ -75,6 +77,7 @@ pub fn generate_config() -> Config {
     api_port:,
     db_name:,
     db_url:,
+    db_pool_size:,
     swim_name:,
     swim_port:,
     bootstrap_nodes:,
@@ -88,7 +91,7 @@ pub fn generate_config() -> Config {
 fn db_config(config: Config) -> pog.Config {
   let assert Ok(config) =
     pog.url_config(config.db_name, config.db_url)
-    |> result.map(pog.pool_size(_, 40))
+    |> result.map(pog.pool_size(_, config.db_pool_size))
     as "Failed to configure pog based on connection string."
 
   config

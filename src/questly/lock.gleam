@@ -19,6 +19,7 @@ pub opaque type Lock {
 pub opaque type Message {
   Heartbeat
   LockLifecycle
+  RefreshLockState
   LockResource
   UnlockResource
   GetLockState(recv: process.Subject(LockState))
@@ -59,6 +60,8 @@ fn initialize(
 
   let returning = Lock(self)
 
+  process.send_after(self, 120_000, RefreshLockState)
+
   actor.initialised(initial_state)
   |> actor.returning(returning)
   |> Ok
@@ -69,6 +72,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
     GetLockState(recv:) -> handle_get_lock_state(state, recv)
     Heartbeat -> handle_heartbeat(state)
     LockLifecycle -> handle_lock_lifecycle(state)
+    RefreshLockState -> handle_periodic_lock_state_refresh(state)
     LockResource -> handle_lock_resource(state)
     UnlockResource -> handle_unlock_resource(state)
   }
@@ -202,6 +206,18 @@ fn handle_refresh_lock_state(
 ) -> actor.Next(State, Message) {
   let #(_remote_nonce, expires_at, lock_state) =
     get_remote_state(db, state.resource, state.nonce)
+
+  actor.continue(State(..state, expires_at:, lock_state:))
+}
+
+fn handle_periodic_lock_state_refresh(
+  state: State,
+) -> actor.Next(State, Message) {
+  let #(_, expires_at, lock_state) =
+    pog.named_connection(state.db)
+    |> get_remote_state(state.resource, state.nonce)
+
+  process.send_after(state.subject, 120_000, RefreshLockState)
 
   actor.continue(State(..state, expires_at:, lock_state:))
 }
