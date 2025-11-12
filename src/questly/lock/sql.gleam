@@ -27,16 +27,6 @@ pub fn cleanup(
   |> pog.execute(db)
 }
 
-/// A row you get from running the `lock` query
-/// defined in `./src/questly/lock/sql/lock.sql`.
-///
-/// > 🐿️ This type definition was generated automatically using v4.5.0 of the
-/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
-///
-pub type LockRow {
-  LockRow(resource_id: String, nonce: String, expires_at: Int)
-}
-
 /// Runs the `lock` query
 /// defined in `./src/questly/lock/sql/lock.sql`.
 ///
@@ -48,15 +38,10 @@ pub fn lock(
   arg_1: String,
   arg_2: String,
   arg_3: Int,
-) -> Result(pog.Returned(LockRow), pog.QueryError) {
-  let decoder = {
-    use resource_id <- decode.field(0, decode.string)
-    use nonce <- decode.field(1, decode.string)
-    use expires_at <- decode.field(2, decode.int)
-    decode.success(LockRow(resource_id:, nonce:, expires_at:))
-  }
+) -> Result(pog.Returned(Nil), pog.QueryError) {
+  let decoder = decode.map(decode.dynamic, fn(_) { Nil })
 
-  "INSERT INTO locks (resource_id, nonce, expires_at) VALUES ($1, $2, $3) RETURNING *;
+  "INSERT INTO locks (resource_id, nonce, expires_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
 "
   |> pog.query
   |> pog.parameter(pog.text(arg_1))
@@ -123,16 +108,6 @@ pub fn release(
   |> pog.execute(db)
 }
 
-/// A row you get from running the `renew` query
-/// defined in `./src/questly/lock/sql/renew.sql`.
-///
-/// > 🐿️ This type definition was generated automatically using v4.5.0 of the
-/// > [squirrel package](https://github.com/giacomocavalieri/squirrel).
-///
-pub type RenewRow {
-  RenewRow(resource_id: String, nonce: String, expires_at: Int)
-}
-
 /// Runs the `renew` query
 /// defined in `./src/questly/lock/sql/renew.sql`.
 ///
@@ -144,18 +119,12 @@ pub fn renew(
   arg_1: String,
   arg_2: String,
   arg_3: Int,
-) -> Result(pog.Returned(RenewRow), pog.QueryError) {
-  let decoder = {
-    use resource_id <- decode.field(0, decode.string)
-    use nonce <- decode.field(1, decode.string)
-    use expires_at <- decode.field(2, decode.int)
-    decode.success(RenewRow(resource_id:, nonce:, expires_at:))
-  }
+) -> Result(pog.Returned(Nil), pog.QueryError) {
+  let decoder = decode.map(decode.dynamic, fn(_) { Nil })
 
   "UPDATE locks
 SET expires_at = $3
-WHERE resource_id = $1 AND nonce = $2
-RETURNING *;
+WHERE resource_id = $1 AND nonce = $2;
 "
   |> pog.query
   |> pog.parameter(pog.text(arg_1))
