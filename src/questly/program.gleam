@@ -4,12 +4,12 @@ import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/otp/static_supervisor as supervisor
-import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import pog
 import questly/api
 import questly/kv
+import questly/lock_manager
 import questly/pubsub
 import questly/swim
 
@@ -138,6 +138,13 @@ fn api_config(config: Config) -> api.ApiConfig {
   )
 }
 
+fn lock_manager_config(config: Config) -> lock_manager.LockManagerConfig {
+  lock_manager.LockManagerConfig(
+    deletion_period: 10_000,
+    db_name: config.db_name,
+  )
+}
+
 pub fn start(config: Config) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(db_config(config) |> pog.supervised)
@@ -145,5 +152,6 @@ pub fn start(config: Config) {
   |> supervisor.add(pubsub_config(config) |> pubsub.supervised)
   |> supervisor.add(kv_config(config) |> kv.supervised)
   |> supervisor.add(api_config(config) |> api.supervised)
+  |> supervisor.add(lock_manager_config(config) |> lock_manager.supervised)
   |> supervisor.start()
 }
