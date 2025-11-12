@@ -4,7 +4,10 @@ import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/otp/static_supervisor as supervisor
+import gleam/otp/supervision
+import gleam/result
 import gleam/string
+import pog
 import questly/api
 import questly/kv
 import questly/pubsub
@@ -18,6 +21,8 @@ pub type Config {
     cluster_secret: String,
     api_secret: String,
     api_port: Int,
+    db_name: process.Name(pog.Message),
+    db_url: String,
     swim_name: process.Name(swim.Message),
     swim_port: Int,
     bootstrap_nodes: List(String),
@@ -36,6 +41,10 @@ pub fn generate_config() -> Config {
   let assert Ok(api_secret) = env.get_string("API_SECRET")
     as "$API_SECRET not set"
   let assert Ok(api_port) = env.get_int("PORT") as "$PORT not set"
+
+  let db_name = process.new_name("database_pool")
+  let assert Ok(db_url) = env.get_string("POSTGRES_URL")
+    as "$POSTGRES_URL not set"
 
   let swim_name = process.new_name("swim")
   let swim_port = env.get_int_or("SWIM_PORT", 8787)
@@ -64,6 +73,8 @@ pub fn generate_config() -> Config {
     cluster_secret:,
     api_secret:,
     api_port:,
+    db_name:,
+    db_url:,
     swim_name:,
     swim_port:,
     bootstrap_nodes:,
@@ -72,6 +83,15 @@ pub fn generate_config() -> Config {
     kv_name:,
     kv_port:,
   )
+}
+
+fn db_config(config: Config) -> pog.Config {
+  let assert Ok(config) =
+    pog.url_config(config.db_name, config.db_url)
+    |> result.map(pog.pool_size(_, 40))
+    as "Failed to configure pog based on connection string."
+
+  config
 }
 
 fn swim_config(config: Config) -> swim.SwimConfig {
@@ -120,6 +140,7 @@ fn api_config(config: Config) -> api.ApiConfig {
 
 pub fn start(config: Config) {
   supervisor.new(supervisor.OneForOne)
+  |> supervisor.add(db_config(config) |> pog.supervised)
   |> supervisor.add(swim_config(config) |> swim.supervised)
   |> supervisor.add(pubsub_config(config) |> pubsub.supervised)
   |> supervisor.add(kv_config(config) |> kv.supervised)
