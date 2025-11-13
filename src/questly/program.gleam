@@ -12,6 +12,7 @@ import questly/kv
 import questly/lock_manager
 import questly/pubsub
 import questly/swim
+import questly/tenant_rate_limit_manager
 
 pub type Config {
   Config(
@@ -142,9 +143,17 @@ fn api_config(config: Config) -> api.ApiConfig {
 }
 
 fn lock_manager_config(config: Config) -> lock_manager.LockManagerConfig {
-  lock_manager.LockManagerConfig(
-    deletion_period: 10_000,
+  lock_manager.LockManagerConfig(deletion_period: 5000, db_name: config.db_name)
+}
+
+fn tenant_rate_limit_manager_config(
+  config: Config,
+) -> tenant_rate_limit_manager.TenantRateLimitManagerConfig {
+  tenant_rate_limit_manager.TenantRateLimitManagerConfig(
     db_name: config.db_name,
+    pubsub: pubsub.from_name(config.pubsub_name),
+    swim: swim.from_name(config.swim_name),
+    kv: kv.from_name(config.kv_name),
   )
 }
 
@@ -156,5 +165,9 @@ pub fn start(config: Config) {
   |> supervisor.add(kv_config(config) |> kv.supervised)
   |> supervisor.add(api_config(config) |> api.supervised)
   |> supervisor.add(lock_manager_config(config) |> lock_manager.supervised)
+  |> supervisor.add(
+    tenant_rate_limit_manager_config(config)
+    |> tenant_rate_limit_manager.supervised,
+  )
   |> supervisor.start()
 }

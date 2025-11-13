@@ -1,12 +1,11 @@
-import gleam/bit_array
-import gleam/crypto
+import gleam/bool
 import gleam/erlang/process
 import gleam/float
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option
 import gleam/otp/actor
-import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
 import pog
@@ -27,6 +26,7 @@ pub opaque type Message {
 
 pub type LockState {
   Locked
+  RemoteLocked
   Unlocked
 }
 
@@ -45,14 +45,18 @@ type State {
 fn initialize(
   self: process.Subject(Message),
   db: process.Name(pog.Message),
+  nonce_prefix: String,
   resource: String,
 ) {
+  let random = int.random(50_000_000) |> int.to_string
+  let nonce = nonce_prefix <> "-" <> random
+
   let initial_state =
     State(
       subject: self,
       db: db,
       resource: resource,
-      nonce: crypto.strong_random_bytes(16) |> bit_array.base64_encode(True),
+      nonce: nonce,
       expires_at: option.None,
       attempting_to_lock: False,
       lock_state: Unlocked,
@@ -60,7 +64,8 @@ fn initialize(
 
   let returning = Lock(self)
 
-  process.send_after(self, 120_000, RefreshLockState)
+  process.send_after(self, int.random(heartbeat_interval), RefreshLockState)
+  process.send_after(self, heartbeat_interval, Heartbeat)
 
   actor.initialised(initial_state)
   |> actor.returning(returning)
@@ -87,7 +92,7 @@ fn handle_get_lock_state(
   actor.continue(state)
 }
 
-const heartbeat_interval = 28_000
+const heartbeat_interval = 12_000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   let now =
@@ -110,7 +115,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   actor.continue(state)
 }
 
-const lock_duration_ms = 60_000
+const lock_duration_ms = 30_000
 
 fn get_remote_state(
   db: pog.Connection,
@@ -129,14 +134,16 @@ fn get_remote_state(
 
   let now = timestamp.system_time() |> timestamp.to_unix_seconds |> float.round
 
-  let locked =
-    list.first(rows)
-    |> result.map(fn(row) { row.nonce == nonce && row.expires_at > now })
-    |> result.unwrap(False)
-
-  let lock_state = case locked {
-    False -> Unlocked
-    True -> Locked
+  let lock_state = case list.first(rows) {
+    Error(Nil) -> Unlocked
+    Ok(row) if row.expires_at < now -> Unlocked
+    Ok(row) if row.nonce != nonce -> RemoteLocked
+    Ok(row) if row.nonce == nonce -> Locked
+    Ok(_row) -> {
+      io.println_error("Unexpected lock row state")
+      io.println_error("resource: " <> resource <> " nonce: " <> nonce)
+      panic as "unexpected lock row state"
+    }
   }
 
   #(remote_nonce, expires_at, lock_state)
@@ -149,7 +156,7 @@ fn handle_lock_lifecycle(state: State) -> actor.Next(State, Message) {
     Locked, True -> handle_renew_lock(state, db)
     Locked, False -> handle_release_lock(state, db)
     Unlocked, True -> handle_acquire_lock(state, db)
-    Unlocked, False -> handle_refresh_lock_state(state, db)
+    Unlocked, False | RemoteLocked, _ -> handle_refresh_lock_state(state, db)
   }
 }
 
@@ -187,6 +194,14 @@ fn handle_acquire_lock(
   state: State,
   db: pog.Connection,
 ) -> actor.Next(State, Message) {
+  let #(_, expires_at, lock_state) =
+    get_remote_state(db, state.resource, state.nonce)
+
+  use <- bool.guard(
+    when: lock_state == RemoteLocked,
+    return: actor.continue(State(..state, expires_at:, lock_state:)),
+  )
+
   let lock_until =
     timestamp.system_time()
     |> timestamp.add(duration.milliseconds(lock_duration_ms))
@@ -234,22 +249,32 @@ fn handle_unlock_resource(state: State) -> actor.Next(State, Message) {
   actor.continue(State(..state, attempting_to_lock: False))
 }
 
-fn start(db: process.Name(pog.Message), resource: String) {
-  actor.new_with_initialiser(5000, initialize(_, db, resource))
+fn start(db: process.Name(pog.Message), nonce_prefix: String, resource: String) {
+  actor.new_with_initialiser(5000, initialize(_, db, nonce_prefix, resource))
   |> actor.on_message(on_message)
   |> actor.start
 }
 
-pub fn new_locked(db: process.Name(pog.Message), resource: String) -> Lock {
-  let assert Ok(start_result) = start(db, resource) as "failed to start lock"
+pub fn new_locked(
+  db: process.Name(pog.Message),
+  nonce_prefix: String,
+  resource: String,
+) -> Lock {
+  let assert Ok(start_result) = start(db, nonce_prefix, resource)
+    as "failed to start lock"
   process.link(start_result.pid)
   process.send(start_result.data.subject, LockResource)
 
   start_result.data
 }
 
-pub fn new_unlocked(db: process.Name(pog.Message), resource: String) -> Lock {
-  let assert Ok(start_result) = start(db, resource) as "failed to start lock"
+pub fn new_unlocked(
+  db: process.Name(pog.Message),
+  nonce_prefix: String,
+  resource: String,
+) -> Lock {
+  let assert Ok(start_result) = start(db, nonce_prefix, resource)
+    as "failed to start lock"
   process.link(start_result.pid)
   process.send(start_result.data.subject, UnlockResource)
 

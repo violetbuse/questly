@@ -7,6 +7,6 @@ CREATE TABLE locks (
 CREATE TABLE tenants (
   id VARCHAR(255) NOT NULL PRIMARY KEY,
   created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM now())::BIGINT),
-  per_day_limit INT,
-  tokens INT DEFAULT 100
+  per_day_limit INT NOT NULL,
+  tokens INT NOT NULL DEFAULT 100
 );

@@ -314,11 +314,7 @@ fn handle_put(
       case value.deleted == False && value.data == data {
         True -> value
         False ->
-          Value(
-            ..value,
-            deleted: False,
-            version: int.max(value.version + 1, now),
-          )
+          Value(data:, deleted: False, version: int.max(value.version + 1, now))
       }
     })
     |> result.unwrap(Value(data:, deleted: False, version: now))

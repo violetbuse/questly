@@ -8,10 +8,12 @@ pub fn main() -> Nil {
   |> dot.set_debug(False)
   |> dot.load
 
-  let assert Ok(_) =
+  let assert Ok(supervisor_start_result) =
     program.generate_config()
     |> program.start()
     as "program failed to start"
+
+  process.link(supervisor_start_result.pid)
 
   process.sleep_forever()
 }

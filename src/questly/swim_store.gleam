@@ -59,6 +59,13 @@ pub fn is_dead(node: NodeInfo) {
 }
 
 pub fn encode_node_info(info: NodeInfo) -> json.Json {
+  encode_node_info_with_stats(info, json.null())
+}
+
+pub fn encode_node_info_with_stats(
+  info: NodeInfo,
+  stats: json.Json,
+) -> json.Json {
   json.object([
     #("id", json.string(info.id)),
     #("hash", json.int(info.hash)),
@@ -69,6 +76,7 @@ pub fn encode_node_info(info: NodeInfo) -> json.Json {
     #("region", json.string(info.region)),
     #("kv_port", json.int(info.kv_port)),
     #("pubsub_port", json.int(info.pubsub_port)),
+    #("statistics", stats),
   ])
 }
 

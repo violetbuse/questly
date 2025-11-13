@@ -1,5 +1,6 @@
-h1:z/ZmVaS5cRzTSUClUadfiyhMZif2IDDpd+H2HccyNbk=
+h1:nALG7oO/XKokKBd0R1G8yRtiRCOLWIr/19bgDIupUmY=
 20251112102458_baseline.sql h1:EAbUE2+KcrNPzP0EqIp08CUzbwRFg/5/E07mwoUmgYk=
 20251112102717_create_locks_table.sql h1:bgT2Wzz2ZFnBvWL/u3CVACKEx0eDtlRs7WEWgluht0Q=
 20251112125656_set_non_null_lock_columns.sql h1:niCezhEhqRJbC2Pw1IAdh8mCJNQYVDEz8IXn225rZWo=
 20251113110434_add_tenants_table.sql h1:IAL0m4DAORf1a8bnwpSpUrz4gIuElop+/dJAGO+960Q=
+20251113111212_set_tenants_table_not_null.sql h1:/l1N+Anb9pUPo+vmLq+fk0mSncDqsXezuZJLLz9V6uw=
