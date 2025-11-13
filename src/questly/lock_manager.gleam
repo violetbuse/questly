@@ -30,7 +30,7 @@ fn initialize(
   let state =
     State(subject: self, period: config.deletion_period, db: config.db_name)
 
-  process.send_after(self, state.period, Heartbeat)
+  process.send_after(self, int.random(state.period), Heartbeat)
 
   actor.initialised(state)
   |> Ok

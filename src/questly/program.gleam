@@ -46,7 +46,7 @@ pub fn generate_config() -> Config {
   let db_name = process.new_name("database_pool")
   let assert Ok(db_url) = env.get_string("POSTGRES_URL")
     as "$POSTGRES_URL not set"
-  let db_pool_size = env.get_int_or("POSTGRES_POOL_SIZE", 10)
+  let db_pool_size = env.get_int_or("DB_POOL_SIZE", 10)
 
   let swim_name = process.new_name("swim")
   let swim_port = env.get_int_or("SWIM_PORT", 8787)

@@ -13,6 +13,7 @@ swap_size_mb = 512
   SWIM_PORT = 8787
   PUBSUB_PORT = 1337
   KV_PORT = 1773
+  DB_POOL_SIZE = 20
 
 [build]
 

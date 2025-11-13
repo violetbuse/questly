@@ -4,7 +4,6 @@ set -eu
 export HOSTNAME="$FLY_MACHINE_ID.vm.$FLY_APP_NAME.internal"
 export BIND_ADDRESS="$FLY_PRIVATE_IP"
 export SERVER_ID="fly_server_$FLY_MACHINE_ID"
-export POSTGRES_URL="$POSTGRES_URL"
 
 ALL_MACHINE_IDS=$(dig +short "all.vms.$FLY_APP_NAME.internal" TXT \
   | tr -d '"' \

@@ -3,3 +3,10 @@ CREATE TABLE locks (
   nonce VARCHAR(255) NOT NULL,
   expires_at BIGINT NOT NULL
 );
+
+CREATE TABLE tenants (
+  id VARCHAR(255) NOT NULL PRIMARY KEY,
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM now())::BIGINT),
+  per_day_limit INT,
+  tokens INT DEFAULT 100
+);

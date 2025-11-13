@@ -239,6 +239,8 @@ fn handle_announce_times(
       })
       |> dict.keys
 
+    use <- bool.guard(when: list.is_empty(keys), return: Ok(Nil))
+
     let node =
       swim.get_remote(state.swim)
       |> list.find(fn(node) { node.id == from })
