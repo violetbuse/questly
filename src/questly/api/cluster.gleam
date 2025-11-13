@@ -2,6 +2,7 @@ import gleam/json
 import gleam/list
 import questly/api/api_utils
 import questly/api/context
+import questly/statistics
 import questly/swim
 import questly/swim_store
 import questly/tenant_rate_limit_manager
@@ -22,7 +23,11 @@ fn get_node_stats(
 ) -> json.Json {
   let tenant_rate_limit =
     tenant_rate_limit_manager.get_tenant_rate_limiter_count(context.kv, node)
-  json.object([#("tenant_rate_limit_instances", json.int(tenant_rate_limit))])
+  let postgres_latency = statistics.get_postgres_latency(context.kv, node)
+  json.object([
+    #("tenant_rate_limit_instances", json.int(tenant_rate_limit)),
+    #("base_postgres_latency", json.nullable(postgres_latency, json.int)),
+  ])
 }
 
 fn get_state(context: context.ApiContext) -> wisp.Response {

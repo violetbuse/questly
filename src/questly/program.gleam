@@ -11,6 +11,7 @@ import questly/api
 import questly/kv
 import questly/lock_manager
 import questly/pubsub
+import questly/statistics
 import questly/swim
 import questly/tenant_rate_limit_manager
 
@@ -157,6 +158,14 @@ fn tenant_rate_limit_manager_config(
   )
 }
 
+fn statistics_config(config: Config) -> statistics.StatisticsConfig {
+  statistics.StatisticsConfig(
+    db: config.db_name,
+    kv: kv.from_name(config.kv_name),
+    swim: swim.from_name(config.swim_name),
+  )
+}
+
 pub fn start(config: Config) {
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(db_config(config) |> pog.supervised)
@@ -169,5 +178,6 @@ pub fn start(config: Config) {
     tenant_rate_limit_manager_config(config)
     |> tenant_rate_limit_manager.supervised,
   )
+  |> supervisor.add(statistics_config(config) |> statistics.supervised)
   |> supervisor.start()
 }

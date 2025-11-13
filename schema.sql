@@ -10,3 +10,19 @@ CREATE TABLE tenants (
   per_day_limit INT NOT NULL,
   tokens INT NOT NULL DEFAULT 100
 );
+
+-- CREATE TABLE requests (
+--   id VARCHAR(255) NOT NULL PRIMARY KEY,
+--   url TEXT NOT NULL,
+--   method VARCHAR(50) NOT NULL,
+--   headers TEXT[] NOT NULL,
+--   body TEXT NOT NULL
+-- );
+
+-- CREATE TABLE responses(
+--   id VARCHAR(255) NOT NULL PRIMARY KEY,
+--   status_code INTEGER NOT NULL,
+--   headers TEXT[] NOT NULL,
+--   body TEXT NOT NULL,
+--   duration INTEGER NOT NULL,
+-- );
