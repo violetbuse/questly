@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/erlang/process
 import gleam/float
 import gleam/int
+import gleam/io
 import gleam/option
 import gleam/otp/actor
 import gleam/result
@@ -11,11 +12,12 @@ import gleam/time/timestamp
 import pog
 import questly/kv
 import questly/lock
+import questly/metrics
 import questly/pubsub
 import questly/pubsub_store
 import questly/subscriber
 import questly/swim
-import questly/tenant_rate_limit/sql
+import questly/tenant/sql
 
 pub opaque type TenantRateLimiter {
   TenantRateLimiter(id: String, pubsub: pubsub.Pubsub, kv: kv.Kv)
@@ -159,7 +161,10 @@ fn compute_increment_period_and_amount(per_day_limit: Int) -> #(Int, Int) {
   #(float.round(period), float.round(factor))
 }
 
-fn use_locked(state: State, cb: fn() -> actor.Next(State, Message)) {
+fn use_locked(
+  state: State,
+  cb: fn() -> actor.Next(State, Message),
+) -> actor.Next(State, Message) {
   use <- bool.lazy_guard(
     when: lock.is_locked(state.lock) == lock.Locked,
     return: cb,
@@ -187,19 +192,24 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   let assert Ok(rows) = sql.get_tenant(db, state.id)
   let assert [row] = rows.rows
 
+  let tokens = {
+    use <- bool.guard(when: row.tokens <= row.per_day_limit, return: row.tokens)
+
+    let assert Ok(_) = sql.set_tokens(db, state.id, row.per_day_limit)
+    row.per_day_limit
+  }
+
   let new_state =
     State(
       ..state,
       per_day_limit: row.per_day_limit,
-      tokens: row.tokens + state.queued_change,
+      tokens: tokens + state.queued_change,
     )
 
   actor.continue(new_state)
 }
 
 fn handle_refresh(state: State) -> actor.Next(State, Message) {
-  use <- use_locked(state)
-
   let db = pog.named_connection(state.db)
   let assert Ok(rows) = sql.get_tenant(db, state.id)
   let assert [row] = rows.rows
@@ -258,22 +268,34 @@ fn handle_decrement(state: State) -> actor.Next(State, Message) {
 fn handle_increment(state: State) -> actor.Next(State, Message) {
   let should_increment = state.tokens < state.per_day_limit
 
+  kv.set(state.kv, state.kv_entry, int.to_string(state.tokens))
+
   let #(period, amount) =
     compute_increment_period_and_amount(state.per_day_limit)
 
   process.send_after(state.subject, period, Increment)
 
   use <- use_locked(state)
+  use <- bool.guard(when: !should_increment, return: actor.continue(state))
 
-  let new_state = case should_increment {
-    False -> state
-    True ->
-      State(
-        ..state,
-        tokens: state.tokens + amount,
-        queued_change: state.queued_change + amount,
-      )
-  }
+  let new_state =
+    State(
+      ..state,
+      tokens: state.tokens + amount,
+      queued_change: state.queued_change + amount,
+    )
+
+  io.println(
+    "Incrementing tokens for tenant "
+    <> state.id
+    <> " by "
+    <> int.to_string(amount)
+    <> " every "
+    <> int.to_string(period)
+    <> "ms",
+  )
+
+  let _ = metrics.increment_tenant_token_increment(amount)
 
   kv.set(state.kv, state.kv_entry, int.to_string(new_state.tokens))
 

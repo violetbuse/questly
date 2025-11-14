@@ -1,0 +1,1 @@
+SELECT * FROM tenants WHERE id > $1 ORDER BY id ASC LIMIT 1000;

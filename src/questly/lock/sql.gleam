@@ -41,7 +41,9 @@ pub fn lock(
 ) -> Result(pog.Returned(Nil), pog.QueryError) {
   let decoder = decode.map(decode.dynamic, fn(_) { Nil })
 
-  "INSERT INTO locks (resource_id, nonce, expires_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
+  "INSERT INTO locks (resource_id, nonce, expires_at)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
 "
   |> pog.query
   |> pog.parameter(pog.text(arg_1))

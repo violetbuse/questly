@@ -65,7 +65,7 @@ fn initialize(
   let returning = Lock(self)
 
   process.send_after(self, int.random(heartbeat_interval), RefreshLockState)
-  process.send_after(self, heartbeat_interval, Heartbeat)
+  process.send_after(self, int.random(heartbeat_interval), Heartbeat)
 
   actor.initialised(initial_state)
   |> actor.returning(returning)
@@ -92,7 +92,7 @@ fn handle_get_lock_state(
   actor.continue(state)
 }
 
-const heartbeat_interval = 12_000
+const heartbeat_interval = 2000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   let now =
@@ -115,7 +115,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   actor.continue(state)
 }
 
-const lock_duration_ms = 30_000
+const lock_duration_ms = 20_000
 
 fn get_remote_state(
   db: pog.Connection,

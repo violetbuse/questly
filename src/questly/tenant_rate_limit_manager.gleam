@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/erlang/process
 import gleam/float
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option
 import gleam/otp/actor
@@ -14,12 +15,13 @@ import gleam/time/timestamp
 import pog
 import questly/hash
 import questly/kv
+import questly/metrics
 import questly/pubsub
 import questly/pubsub_store
 import questly/subscriber
 import questly/swim
 import questly/swim_store
-import questly/tenant_rate_limit/sql
+import questly/tenant/sql
 import questly/tenant_rate_limiter
 
 pub type TenantRateLimitManagerConfig {
@@ -115,10 +117,10 @@ fn initialize(
       rate_limiters: dict.new(),
     )
 
-  process.send_after(self, int.random(2000), Heartbeat)
+  process.send_after(self, int.random(10_000), Heartbeat)
 
   let self = swim.get_self(state.swim)
-  set_tenant_rate_limiter_count(state.kv, self, 0)
+  let _ = set_tenant_rate_limiter_count(state.kv, self, 0)
 
   actor.initialised(state)
   |> Ok
@@ -134,14 +136,14 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
 
 const heartbeat_interval = 300_000
 
-fn heartbeat_get_loop(db: pog.Connection, cursor: Int) {
+fn heartbeat_get_loop(db: pog.Connection, cursor: String) {
   let assert Ok(pog.Returned(count: _, rows:)) = sql.list_tenants(db, cursor)
 
   case rows {
     [] -> []
     rows -> {
       let assert Ok(last) = list.last(rows)
-      list.append(rows, heartbeat_get_loop(db, last.created_at))
+      list.append(rows, heartbeat_get_loop(db, last.id))
     }
   }
 }
@@ -149,9 +151,9 @@ fn heartbeat_get_loop(db: pog.Connection, cursor: Int) {
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.spawn(fn() {
     let db = pog.named_connection(state.db)
-    let rows = heartbeat_get_loop(db, 0)
+    let rows = heartbeat_get_loop(db, "")
     let self = swim.get_self(state.swim)
-    let remote = swim.get_remote(state.swim)
+    let remote = swim.get_remote(state.swim) |> list.filter(swim_store.is_alive)
 
     list.each(rows, fn(row) {
       use <- bool.guard(
@@ -172,7 +174,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
 
   let process_count = dict.size(state.rate_limiters)
   let self = swim.get_self(state.swim)
-  set_tenant_rate_limiter_count(state.kv, self, process_count)
+  let _ = set_tenant_rate_limiter_count(state.kv, self, process_count)
 
   actor.continue(state)
 }
@@ -198,6 +200,8 @@ fn handle_create_tenant(state: State, id: String) -> actor.Next(State, Message) 
     return: actor.continue(state),
   )
 
+  io.println("Starting tenant_rate_limiter instance for " <> id)
+
   let assert Ok(tenant_rate_limit) =
     factory_supervisor.start_child(state.factory, id)
 
@@ -206,7 +210,7 @@ fn handle_create_tenant(state: State, id: String) -> actor.Next(State, Message) 
 
   let rate_limiter_count = dict.size(rate_limiters)
   let self = swim.get_self(state.swim)
-  set_tenant_rate_limiter_count(state.kv, self, rate_limiter_count)
+  let _ = set_tenant_rate_limiter_count(state.kv, self, rate_limiter_count)
 
   actor.continue(State(..state, rate_limiters:))
 }
@@ -217,6 +221,7 @@ fn set_tenant_rate_limiter_count(
   count: Int,
 ) {
   kv.set(kv, instances_meter_prefix <> node.id, int.to_string(count))
+  metrics.observe_tenant_rate_limit_count(count)
 }
 
 pub fn get_tenant_rate_limiter_count(kv: kv.Kv, node: swim_store.NodeInfo) {

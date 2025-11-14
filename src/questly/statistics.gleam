@@ -1,3 +1,4 @@
+import glatistics
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/float
@@ -11,6 +12,7 @@ import gleam/time/duration
 import gleam/time/timestamp
 import pog
 import questly/kv
+import questly/metrics
 import questly/swim
 import questly/swim_store
 
@@ -65,6 +67,8 @@ const heartbeat_interval = 5000
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   let _ = test_postgres_latency(state)
 
+  let _ = handle_erlang_statistics()
+
   process.send_after(state.subject, heartbeat_interval, Heartbeat)
 
   actor.continue(state)
@@ -102,6 +106,7 @@ fn publish_postgres_latency(state: State) {
   let self = swim.get_self(state.swim)
   let key = postgres_latency_prefix <> self.id
   kv.set(state.kv, key, int.to_string(latency))
+  metrics.observe_postgres_latency(latency)
 }
 
 pub fn get_postgres_latency(
@@ -125,6 +130,19 @@ fn handle_register_postgres_latency(
   let _ = publish_postgres_latency(new_state)
 
   actor.continue(new_state)
+}
+
+fn handle_erlang_statistics() {
+  let #(gc_count, words_reclaimed) = glatistics.garbage_collection()
+  let _ = metrics.observe_number_of_gcs(gc_count)
+  let _ = metrics.observe_words_reclaimed(words_reclaimed)
+
+  let total_memory_used = glatistics.memory(glatistics.Total)
+  let _ = metrics.observe_total_memory_used(total_memory_used)
+
+  let active_scheduler_tasks =
+    glatistics.active_tasks_all() |> list.fold(0, int.add)
+  let _ = metrics.observe_active_scheduler_tasks(active_scheduler_tasks)
 }
 
 pub fn supervised(

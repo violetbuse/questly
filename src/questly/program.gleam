@@ -10,6 +10,7 @@ import pog
 import questly/api
 import questly/kv
 import questly/lock_manager
+import questly/metrics
 import questly/pubsub
 import questly/statistics
 import questly/swim
@@ -33,6 +34,7 @@ pub type Config {
     pubsub_port: Int,
     kv_name: process.Name(kv.Message),
     kv_port: Int,
+    metrics_port: Int,
   )
 }
 
@@ -70,6 +72,8 @@ pub fn generate_config() -> Config {
   let kv_name = process.new_name("kv")
   let kv_port = env.get_int_or("KV_PORT", 1773)
 
+  let metrics_port = env.get_int_or("METRICS_PORT", 9090)
+
   Config(
     node_id:,
     hostname:,
@@ -87,6 +91,7 @@ pub fn generate_config() -> Config {
     pubsub_port:,
     kv_name:,
     kv_port:,
+    metrics_port:,
   )
 }
 
@@ -138,6 +143,7 @@ fn api_config(config: Config) -> api.ApiConfig {
     swim: swim.from_name(config.swim_name),
     pubsub: pubsub.from_name(config.pubsub_name),
     kv: kv.from_name(config.kv_name),
+    db: pog.named_connection(config.db_name),
     api_secret: config.api_secret,
     cluster_secret: config.cluster_secret,
   )
@@ -166,7 +172,16 @@ fn statistics_config(config: Config) -> statistics.StatisticsConfig {
   )
 }
 
+fn metrics_config(config: Config) -> metrics.MetricsConfig {
+  metrics.MetricsConfig(
+    port: config.metrics_port,
+    cluster_secret: config.cluster_secret,
+  )
+}
+
 pub fn start(config: Config) {
+  let _ = metrics.initialize()
+
   supervisor.new(supervisor.OneForOne)
   |> supervisor.add(db_config(config) |> pog.supervised)
   |> supervisor.add(swim_config(config) |> swim.supervised)
@@ -179,5 +194,6 @@ pub fn start(config: Config) {
     |> tenant_rate_limit_manager.supervised,
   )
   |> supervisor.add(statistics_config(config) |> statistics.supervised)
+  |> supervisor.add(metrics_config(config) |> metrics.supervised)
   |> supervisor.start()
 }

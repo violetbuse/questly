@@ -14,6 +14,7 @@ swap_size_mb = 512
   PUBSUB_PORT = 1337
   KV_PORT = 1773
   DB_POOL_SIZE = 10
+  METRICS_PORT = 9090
 
 [build]
 
@@ -26,9 +27,9 @@ swap_size_mb = 512
   processes = ['app']
 
 [[vm]]
-  memory = '256mb'
+  memory = '512mb'
   cpu_kind = 'shared'
-  cpus = 1
+  cpus = 2
 
 [checks]
   [checks.api_http]
@@ -66,3 +67,7 @@ swap_size_mb = 512
     port = 1773
     timeout = '10s'
     type = 'http'
+
+[metrics]
+port = 9090
+path = '/metrics'

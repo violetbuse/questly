@@ -1,8 +1,10 @@
 import mist
+import pog
 import questly/api/cluster
 import questly/api/context
 import questly/api/kv as kv_api
 import questly/api/pubsub as pubsub_api
+import questly/api/tenant as tenant_api
 import questly/kv
 import questly/pubsub
 import questly/swim
@@ -16,6 +18,7 @@ pub type ApiConfig {
     pubsub: pubsub.Pubsub,
     kv: kv.Kv,
     api_secret: String,
+    db: pog.Connection,
     cluster_secret: String,
   )
 }
@@ -26,6 +29,7 @@ fn router(req: wisp.Request, context: context.ApiContext) -> wisp.Response {
     ["cluster", ..] -> cluster.router(req, context)
     ["pubsub", ..] -> pubsub_api.router(req, context)
     ["kv", ..] -> kv_api.router(req, context)
+    ["tenants", ..] -> tenant_api.router(req, context)
     _ -> wisp.not_found()
   }
 }
@@ -40,6 +44,7 @@ pub fn supervised(config: ApiConfig) {
       swim: config.swim,
       pubsub: config.pubsub,
       kv: config.kv,
+      db: config.db,
       cluster_secret: config.cluster_secret,
     )
 
