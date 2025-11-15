@@ -21,6 +21,7 @@ pub type Config {
     node_id: String,
     hostname: String,
     region: String,
+    primary_region: String,
     cluster_secret: String,
     api_secret: String,
     api_port: Int,
@@ -42,6 +43,8 @@ pub fn generate_config() -> Config {
   let assert Ok(node_id) = env.get_string("SERVER_ID") as "$SERVER_ID not set"
   let assert Ok(hostname) = env.get_string("HOSTNAME") as "$HOSTNAME not set"
   let assert Ok(region) = env.get_string("REGION") as "$REGION not set"
+  let assert Ok(primary_region) = env.get_string("PRIMARY_REGION")
+    as "$PRIMARY_REGION not set"
   let assert Ok(cluster_secret) = env.get_string("SECRET") as "$SECRET not set"
   let assert Ok(api_secret) = env.get_string("API_SECRET")
     as "$API_SECRET not set"
@@ -78,6 +81,7 @@ pub fn generate_config() -> Config {
     node_id:,
     hostname:,
     region:,
+    primary_region:,
     cluster_secret:,
     api_secret:,
     api_port:,
@@ -110,6 +114,7 @@ fn swim_config(config: Config) -> swim.SwimConfig {
     node_id: config.node_id,
     hostname: config.hostname,
     region: config.region,
+    is_primary_region: config.primary_region == config.region,
     bootstrap_hosts: config.bootstrap_nodes,
     port: config.swim_port,
     secret: config.cluster_secret,

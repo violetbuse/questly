@@ -92,7 +92,7 @@ fn handle_get_lock_state(
   actor.continue(state)
 }
 
-const heartbeat_interval = 2000
+const heartbeat_interval = 5000
 
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   let now =
@@ -115,7 +115,7 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   actor.continue(state)
 }
 
-const lock_duration_ms = 20_000
+const lock_duration_ms = 60_000
 
 fn get_remote_state(
   db: pog.Connection,

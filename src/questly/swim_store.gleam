@@ -22,6 +22,7 @@ pub type NodeInfo {
     hostname: String,
     swim_port: Int,
     region: String,
+    is_primary_region: Bool,
     kv_port: Int,
     pubsub_port: Int,
   )
@@ -58,6 +59,10 @@ pub fn is_dead(node: NodeInfo) {
   node.state == Dead
 }
 
+pub fn is_primary_region(node: NodeInfo) {
+  node.is_primary_region
+}
+
 pub fn encode_node_info(info: NodeInfo) -> json.Json {
   encode_node_info_with_stats(info, json.null())
 }
@@ -72,8 +77,9 @@ pub fn encode_node_info_with_stats(
     #("version", json.int(info.version)),
     #("state", encode_node_state(info.state)),
     #("hostname", json.string(info.hostname)),
-    #("swim_port", json.int(info.swim_port)),
     #("region", json.string(info.region)),
+    #("is_primary_region", json.bool(info.is_primary_region)),
+    #("swim_port", json.int(info.swim_port)),
     #("kv_port", json.int(info.kv_port)),
     #("pubsub_port", json.int(info.pubsub_port)),
     #("statistics", stats),
@@ -87,8 +93,9 @@ pub fn decode_node_info() -> decode.Decoder(NodeInfo) {
     use version <- decode.field("version", decode.int)
     use state <- decode.field("state", decode_node_state())
     use hostname <- decode.field("hostname", decode.string)
-    use swim_port <- decode.field("swim_port", decode.int)
     use region <- decode.field("region", decode.string)
+    use is_primary_region <- decode.field("is_primary_region", decode.bool)
+    use swim_port <- decode.field("swim_port", decode.int)
     use kv_port <- decode.field("kv_port", decode.int)
     use pubsub_port <- decode.field("pubsub_port", decode.int)
 
@@ -100,6 +107,7 @@ pub fn decode_node_info() -> decode.Decoder(NodeInfo) {
       hostname:,
       swim_port:,
       region:,
+      is_primary_region:,
       kv_port:,
       pubsub_port:,
     ))

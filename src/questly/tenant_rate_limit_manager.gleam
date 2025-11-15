@@ -161,23 +161,26 @@ fn heartbeat_get_loop(
   }
 }
 
+fn is_replica(id: String, state: State) -> Bool {
+  let self = swim.get_self(state.swim)
+  let remote =
+    swim.get_remote(state.swim)
+    |> list.filter(swim_store.is_primary_region)
+    |> list.filter(swim_store.is_alive)
+
+  hash.is_current_node_replica(id, 2, self, remote)
+}
+
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.spawn(fn() {
     let db = pog.named_connection(state.db)
     let rows = heartbeat_get_loop(db, [], "")
-    let self = swim.get_self(state.swim)
-    let remote = swim.get_remote(state.swim) |> list.filter(swim_store.is_alive)
 
     list.each(rows, fn(row) {
       use <- bool.guard(
         when: dict.has_key(state.rate_limiters, row.id),
         return: Ok(Nil),
       )
-      use <- bool.guard(
-        when: !hash.is_current_node_replica(row.id, 2, self, remote),
-        return: Ok(Nil),
-      )
-
       process.send(state.subject, NewTenant(row.id))
       Ok(Nil)
     })
@@ -194,6 +197,11 @@ fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
 
 fn handle_new_tenant(state: State, id: String) -> actor.Next(State, Message) {
   process.spawn(fn() {
+    let existing = dict.has_key(state.rate_limiters, id)
+
+    use <- bool.guard(when: existing, return: Nil)
+    use <- bool.guard(when: !is_replica(id, state), return: Nil)
+
     let db = pog.named_connection(state.db)
     case sql.get_tenant(db, id) {
       Ok(pog.Returned(count: 1, rows: [tenant])) ->

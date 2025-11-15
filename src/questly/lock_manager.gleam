@@ -39,7 +39,7 @@ fn initialize(
 fn on_message(state: State, _message: Message) {
   process.send_after(state.subject, state.period, Heartbeat)
 
-  let older_than = 30
+  let older_than = 120
   let expired_before =
     timestamp.system_time()
     |> timestamp.to_unix_seconds

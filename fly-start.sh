@@ -21,33 +21,45 @@ export BOOTSTRAP_NODES="${out}"
 
 # echo "bootstrap_nodes=$BOOTSTRAP_NODES"
 
-REGION="auto"
 
-case $FLY_REGION in
-  ams | cdg | fra | lhr | arn)
-    REGION="eu-west"
-    ;;
+map_region() {
+  local input="$1"
 
-  ewr | iad)
-    REGION="us-east"
-    ;;
+  case "$input" in
+    ams | cdg | fra | lhr | arn)
+      echo "eu-west"
+      ;;
 
-  lax | sjc)
-    REGION="us-west"
-    ;;
+    ewr | iad)
+      echo "us-east"
+      ;;
 
-  nrt | sin)
-    REGION="asia-east"
-    ;;
+    lax | sjc)
+      echo "us-west"
+      ;;
 
-  *)
-    echo "Unsupported region: $FLY_REGION"
-    exit 1
-    ;;
-esac
+    nrt | sin)
+      echo "asia-east"
+      ;;
+
+    *)
+      echo "Unsupported region: $input"
+      return 1
+      ;;
+  esac
+}
+
+REGION="$(map_region "$FLY_REGION")" || exit 1
+FLY_PRIMARY_REGION="$PRIMARY_REGION"
+PRIMARY_REGION="$(map_region "$FLY_PRIMARY_REGION")" || exit 1
 
 export REGION=$REGION
+export PRIMARY_REGION=$PRIMARY_REGION
 export VALID_REGIONS="eu-west,us-east,us-west,asia-east"
+
+echo "region=$REGION"
+echo "primary_region=$PRIMARY_REGION"
+echo "valid_regions=$VALID_REGIONS"
 
 PACKAGE=questly
 BASE=$(dirname "$0")
