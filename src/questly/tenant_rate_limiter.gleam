@@ -110,18 +110,13 @@ fn initialize(
     lock.new_locked(config.db, self_node.id, "tenant_rate_limit_" <> config.id)
 
   let channel = "ch_tenant_rate_limit_" <> config.id
-  let subscriber_mapper = fn(event: pubsub_store.Event) -> Result(Message, Nil) {
-    use <- bool.guard(when: event.channel != channel, return: Error(Nil))
-
-    case event.id {
-      "decrement" -> Ok(Decrement)
-      "refresh" -> Ok(Refresh)
-      _ -> Error(Nil)
-    }
-  }
-
   let ratelimit_subscriber =
-    subscriber.new(config.pubsub, self, subscriber_mapper, option.None)
+    subscriber.new(
+      config.pubsub,
+      self,
+      subscriber_mapper(_, channel),
+      option.None,
+    )
 
   let initial_state =
     State(
@@ -144,6 +139,16 @@ fn initialize(
   actor.initialised(initial_state)
   |> actor.returning(self)
   |> Ok
+}
+
+fn subscriber_mapper(event: pubsub_store.Event, channel: String) {
+  use <- bool.guard(when: event.channel != channel, return: Error(Nil))
+
+  case event.id {
+    "decrement" -> Ok(Decrement)
+    "refresh" -> Ok(Refresh)
+    _ -> Error(Nil)
+  }
 }
 
 const minimum_period = 20_000.0

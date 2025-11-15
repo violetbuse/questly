@@ -91,22 +91,6 @@ fn initialize(
     |> network_channel.cluster_secret(config.secret)
     |> network_channel.start
 
-  let subscriber_mapper = fn(event: pubsub_store.Event) -> Result(Message, Nil) {
-    use <- bool.guard(when: event.channel != kv_channel, return: Error(Nil))
-
-    let decoder = {
-      use from <- decode.field("from", decode.string)
-      use time_map <- decode.field(
-        "time_map",
-        decode.dict(decode.string, decode.int),
-      )
-
-      decode.success(AnnounceTimes(from:, time_map:))
-    }
-
-    json.parse(event.data, decoder) |> result.replace_error(Nil)
-  }
-
   let kv_subscriber =
     subscriber.new(config.pubsub, self, subscriber_mapper, option.Some(0))
 
@@ -127,6 +111,22 @@ fn initialize(
   actor.initialised(state)
   |> actor.returning(result)
   |> Ok
+}
+
+fn subscriber_mapper(event: pubsub_store.Event) {
+  use <- bool.guard(when: event.channel != kv_channel, return: Error(Nil))
+
+  let decoder = {
+    use from <- decode.field("from", decode.string)
+    use time_map <- decode.field(
+      "time_map",
+      decode.dict(decode.string, decode.int),
+    )
+
+    decode.success(AnnounceTimes(from:, time_map:))
+  }
+
+  json.parse(event.data, decoder) |> result.replace_error(Nil)
 }
 
 fn on_message(state: State, message: Message) -> actor.Next(State, Message) {

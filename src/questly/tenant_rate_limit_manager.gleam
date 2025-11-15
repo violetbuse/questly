@@ -82,15 +82,6 @@ fn initialize(
   self: process.Subject(Message),
   config: TenantRateLimitManagerConfig,
 ) -> Result(actor.Initialised(State, Message, Nil), String) {
-  let subscriber_mapper = fn(event: pubsub_store.Event) -> Result(Message, Nil) {
-    use <- bool.guard(when: event.channel != pubsub_channel, return: Error(Nil))
-
-    case event.id {
-      event_id if event_id == new_tenant_id -> Ok(NewTenant(event.data))
-      _ -> Error(Nil)
-    }
-  }
-
   let subscriber =
     subscriber.new(config.pubsub, self, subscriber_mapper, option.None)
 
@@ -126,6 +117,15 @@ fn initialize(
   |> Ok
 }
 
+fn subscriber_mapper(event: pubsub_store.Event) -> Result(Message, Nil) {
+  use <- bool.guard(when: event.channel != pubsub_channel, return: Error(Nil))
+
+  case event.id {
+    event_id if event_id == new_tenant_id -> Ok(NewTenant(event.data))
+    _ -> Error(Nil)
+  }
+}
+
 fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     CreateTenant(id:) -> handle_create_tenant(state, id)
@@ -136,14 +136,19 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
 
 const heartbeat_interval = 300_000
 
-fn heartbeat_get_loop(db: pog.Connection, cursor: String) {
+fn heartbeat_get_loop(
+  db: pog.Connection,
+  accumulator: List(sql.ListTenantsRow),
+  cursor: String,
+) {
   let assert Ok(pog.Returned(count: _, rows:)) = sql.list_tenants(db, cursor)
 
   case rows {
-    [] -> []
+    [] -> accumulator
     rows -> {
       let assert Ok(last) = list.last(rows)
-      list.append(rows, heartbeat_get_loop(db, last.id))
+      let new_accumulator = list.append(accumulator, rows)
+      heartbeat_get_loop(db, new_accumulator, last.id)
     }
   }
 }
@@ -151,7 +156,7 @@ fn heartbeat_get_loop(db: pog.Connection, cursor: String) {
 fn handle_heartbeat(state: State) -> actor.Next(State, Message) {
   process.spawn(fn() {
     let db = pog.named_connection(state.db)
-    let rows = heartbeat_get_loop(db, "")
+    let rows = heartbeat_get_loop(db, [], "")
     let self = swim.get_self(state.swim)
     let remote = swim.get_remote(state.swim) |> list.filter(swim_store.is_alive)
 
