@@ -86,15 +86,7 @@ fn initialize(
     subscriber.new(config.pubsub, self, subscriber_mapper, option.None)
 
   let assert Ok(factory_supervisor) =
-    factory_supervisor.worker_child(fn(tenant_id) {
-      tenant_rate_limiter.start(tenant_rate_limiter.TenantRateLimiterConfig(
-        id: tenant_id,
-        db: config.db_name,
-        pubsub: config.pubsub,
-        kv: config.kv,
-        swim: config.swim,
-      ))
-    })
+    factory_supervisor.worker_child(factory_worker_child(_, config))
     |> factory_supervisor.start
 
   let state =
@@ -108,7 +100,7 @@ fn initialize(
       rate_limiters: dict.new(),
     )
 
-  process.send_after(self, int.random(10_000), Heartbeat)
+  process.send_after(self, int.random(1000), Heartbeat)
 
   let self = swim.get_self(state.swim)
   let _ = set_tenant_rate_limiter_count(state.kv, self, 0)
@@ -124,6 +116,22 @@ fn subscriber_mapper(event: pubsub_store.Event) -> Result(Message, Nil) {
     event_id if event_id == new_tenant_id -> Ok(NewTenant(event.data))
     _ -> Error(Nil)
   }
+}
+
+fn factory_worker_child(
+  tenant_id: String,
+  config: TenantRateLimitManagerConfig,
+) -> Result(
+  actor.Started(process.Subject(tenant_rate_limiter.Message)),
+  actor.StartError,
+) {
+  tenant_rate_limiter.start(tenant_rate_limiter.TenantRateLimiterConfig(
+    id: tenant_id,
+    db: config.db_name,
+    pubsub: config.pubsub,
+    kv: config.kv,
+    swim: config.swim,
+  ))
 }
 
 fn on_message(state: State, message: Message) -> actor.Next(State, Message) {

@@ -133,8 +133,8 @@ fn initialize(
     )
 
   process.send_after(self, int.random(commit_period), Commit)
-  process.send_after(self, int.random(5000), Heartbeat)
-  process.send_after(self, 5000, Increment)
+  process.send_after(self, int.random(1000), Heartbeat)
+  process.send_after(self, 1100, Increment)
 
   actor.initialised(initial_state)
   |> actor.returning(self)
